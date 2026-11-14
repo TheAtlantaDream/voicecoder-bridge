@@ -90,6 +90,11 @@ func (a *AgentAPI) Run(ctx context.Context, prompt string, onUpdate UpdateFunc) 
 	}
 	beforeLen := len(before)
 
+	baseline, err := SnapshotTree(runCtx, a.repo)
+	if err != nil {
+		return fail(errNoDiff)
+	}
+
 	sent = true
 	code, err := a.post(runCtx, "user", prompt)
 	if err != nil {
@@ -167,7 +172,7 @@ func (a *AgentAPI) Run(ctx context.Context, prompt string, onUpdate UpdateFunc) 
 		onUpdate(summary)
 	}
 
-	diff, err := Diff(runCtx, a.repo)
+	diff, err := DiffSince(runCtx, a.repo, baseline)
 	if err != nil {
 		return fail(errNoDiff)
 	}

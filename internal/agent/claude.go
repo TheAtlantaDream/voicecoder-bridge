@@ -45,6 +45,11 @@ func (c *Claude) Run(ctx context.Context, prompt string, onUpdate UpdateFunc) (R
 		return Result{}, err
 	}
 
+	baseline, err := SnapshotTree(runCtx, c.repo)
+	if err != nil {
+		return fail(errNoDiff)
+	}
+
 	cmd := exec.CommandContext(runCtx, "claude", "-p", prompt, "--output-format", "json")
 	cmd.Dir = c.repo
 	// Do not wait forever on output pipes held open by leftover child processes.
@@ -72,7 +77,7 @@ func (c *Claude) Run(ctx context.Context, prompt string, onUpdate UpdateFunc) (R
 		onUpdate(summary)
 	}
 
-	diff, err := Diff(runCtx, c.repo)
+	diff, err := DiffSince(runCtx, c.repo, baseline)
 	if err != nil {
 		return fail(errNoDiff)
 	}

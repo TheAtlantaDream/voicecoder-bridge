@@ -1,7 +1,9 @@
 FROM python:3.12-slim-bookworm
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      ffmpeg \
+      libsndfile1 \
+      curl \
+      ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -9,12 +11,10 @@ COPY requirements-whisper.txt .
 RUN pip install --no-cache-dir -r requirements-whisper.txt
 COPY whisper_server.py download_model.py ./
 
-ENV WHISPER_MODEL=small.en \
-    WHISPER_DEVICE=cpu \
-    WHISPER_COMPUTE_TYPE=int8 \
+ENV PARAKEET_MODEL=sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8 \
+    PARAKEET_PROVIDER=cpu \
     WHISPER_DOWNLOAD_ROOT=/models \
-    WHISPER_CPU_THREADS=8 \
-    WHISPER_BEAM_SIZE=1
+    WHISPER_CPU_THREADS=8
 
 EXPOSE 8080
 CMD ["uvicorn", "whisper_server:app", "--host", "0.0.0.0", "--port", "8080"]

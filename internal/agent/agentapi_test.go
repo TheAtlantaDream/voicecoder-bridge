@@ -57,7 +57,7 @@ func (f *fakeAgentAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			f.status = "running"
 			f.pollsLeft = f.pollsUntilStable
 			if f.onRunning != nil {
-				go f.onRunning()
+				f.onRunning()
 			}
 		}
 		_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
@@ -93,14 +93,17 @@ func newClient(t *testing.T, f *fakeAgentAPI, repo string, timeout time.Duration
 
 // TestAgentAPIHappyPath checks the whole run: the prompt is sent as a user
 // message, and the result is the agent's last new reply, un-wrapped, plus
-// the diff of the project folder. Partials are streamed via onUpdate.
+// only the files this run changed. Partials are streamed via onUpdate.
 func TestAgentAPIHappyPath(t *testing.T) {
 	repo := newRepo(t, true)
-	write(t, repo, "tracked.txt", "two\n")
+	write(t, repo, "prior.txt", "already here\n") // pre-existing dirty tree must not appear
 	f := &fakeAgentAPI{
 		messages:         []apiMessage{{Role: "agent", Content: "Welcome, this is an old message."}},
 		reply:            "I changed tracked.txt so that it now says two instead of one, and there are no\ntests in this project to run.",
 		pollsUntilStable: 2,
+		onRunning: func() {
+			write(t, repo, "tracked.txt", "two\n")
+		},
 	}
 	a := newClient(t, f, repo, time.Minute)
 
@@ -117,6 +120,9 @@ func TestAgentAPIHappyPath(t *testing.T) {
 	}
 	if !strings.Contains(res.Diff, "+two") {
 		t.Errorf("diff = %q, want the change to tracked.txt", res.Diff)
+	}
+	if strings.Contains(res.Diff, "prior.txt") {
+		t.Errorf("diff = %q, must not include files changed before this run", res.Diff)
 	}
 	if len(partials) == 0 || partials[len(partials)-1] != want {
 		t.Errorf("partials = %q, want the final summary streamed", partials)
@@ -148,7 +154,7 @@ func TestAgentAPIBusy(t *testing.T) {
 // with Esc and reported as taking too long.
 func TestAgentAPITimeout(t *testing.T) {
 	f := &fakeAgentAPI{pollsUntilStable: -1}
-	a := newClient(t, f, newRepo(t, true), 50*time.Millisecond)
+	a := newClient(t, f, newRepo(t, true), 500*time.Millisecond)
 
 	_, err := a.Run(context.Background(), "a huge request", nil)
 	if err != errTimeout {

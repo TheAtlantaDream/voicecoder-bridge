@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -112,8 +113,14 @@ func TestClaudeCancel(t *testing.T) {
 }
 
 func TestClaudeNotInstalled(t *testing.T) {
-	t.Setenv("PATH", t.TempDir())
-	_, err := NewClaude(t.TempDir(), 5*time.Second).Run(context.Background(), "x", nil)
+	repo := newRepo(t, true)
+	gitPath, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Keep git for the pre-run snapshot; hide claude.
+	t.Setenv("PATH", filepath.Dir(gitPath))
+	_, err = NewClaude(repo, 5*time.Second).Run(context.Background(), "x", nil)
 	if err != errUnreachable {
 		t.Errorf("err = %v, want %v", err, errUnreachable)
 	}

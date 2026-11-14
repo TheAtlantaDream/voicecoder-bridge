@@ -3,7 +3,7 @@
 The bridge is the server between the VoiceCoder web app and the coding agent.
 
 - The web app sends microphone audio or typed text over a WebSocket.
-- The bridge turns audio into text with a local Faster-Whisper server (small.en, int8 CPU), then cleans the text (strips wake phrases like "hey VoiceCoder" / "hey Coder" / "Coder", filler words, and turns "auth dot py" into "auth.py").
+- The bridge turns audio into text with a local Parakeet TDT server (sherpa-onnx int8 CPU), then cleans the text (strips wake phrases like "hey VoiceCoder" / "hey Coder" / "Coder", filler words, and turns "auth dot py" into "auth.py").
 - With an agent configured, the bridge sends each cleaned request to the coding agent as a task and returns the agent's summary and the code changes.
 
 Without an agent it only transcribes and cleans.
@@ -22,14 +22,14 @@ The bridge listens on `:8000`:
 - `ws://localhost:8000/ws` is the WebSocket.
 - `http://localhost:8000/health` returns `ok`.
 
-For speech, the bridge needs a Faster-Whisper server on `http://localhost:8080` that speaks the same `/inference` API as whisper.cpp. Docker Compose builds and starts both:
+For speech, the bridge needs a Parakeet TDT (sherpa-onnx) server on `http://localhost:8080` that speaks the same `/inference` API as whisper.cpp. Docker Compose builds and starts both:
 
 ```
-./model-download.sh      # once, downloads the small.en CTranslate2 model
+./model-download.sh      # once, downloads Parakeet TDT 0.6B v2 int8 (~0.5 GB)
 docker compose up --build
 ```
 
-Override the model with `WHISPER_MODEL` (for example `base.en` or `distil-small.en`).
+Default model is English `sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8`. Override with `PARAKEET_MODEL` (for example the multilingual `sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8`).
 
 The compose file starts the bridge with no agent.
 
@@ -161,9 +161,9 @@ Spoken requests must start with a wake phrase: "hey VoiceCoder", "VoiceCoder", "
 
 ### The `diff` field
 
-- `diff` is everything in the project folder that is not yet approved (committed): staged and unstaged edits, and new files. Ignored files are left out.
-- It is not only the last request. If two requests ran and neither was approved, the diff shows both.
-- It is empty, and the field is left out of the JSON, when nothing is waiting for approval. That is the case right after an approve.
+- `diff` is only what this request changed: the working tree is snapshotted before the agent runs, then compared afterward. Earlier uncommitted edits from previous requests are left out.
+- Ignored files are left out.
+- It is empty, and the field is left out of the JSON, when this request changed nothing.
 - The same text is also written to `.voicecoder/latest.diff` in the project folder (gitignored) so the web app can open it in VS Code.
 
 ### Status messages

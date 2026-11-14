@@ -163,3 +163,50 @@ func TestDiffNotARepo(t *testing.T) {
 		t.Error("err = nil, want an error for a folder that is not a repo")
 	}
 }
+
+// TestDiffSinceOnlyThisRun checks that DiffSince returns only changes made
+// after the snapshot, even when the working tree was already dirty.
+func TestDiffSinceOnlyThisRun(t *testing.T) {
+	dir := newRepo(t, true)
+	write(t, dir, "tracked.txt", "dirty-before\n")
+	write(t, dir, "prior.txt", "prior\n")
+	before, err := SnapshotTree(context.Background(), dir)
+	if err != nil {
+		t.Fatalf("SnapshotTree: %v", err)
+	}
+	write(t, dir, "tracked.txt", "dirty-after\n")
+	write(t, dir, "new.txt", "added this run\n")
+	d, err := DiffSince(context.Background(), dir, before)
+	if err != nil {
+		t.Fatalf("DiffSince: %v", err)
+	}
+	for _, want := range []string{"-dirty-before", "+dirty-after", "new.txt", "+added this run"} {
+		if !strings.Contains(d, want) {
+			t.Errorf("diff is missing %q:\n%s", want, d)
+		}
+	}
+	if strings.Contains(d, "prior.txt") || strings.Contains(d, "+prior") {
+		t.Errorf("diff includes pre-snapshot files:\n%s", d)
+	}
+	full := diffOf(t, dir)
+	if !strings.Contains(full, "prior.txt") {
+		t.Errorf("full Diff should still include prior.txt:\n%s", full)
+	}
+}
+
+// TestDiffSinceUnchanged checks that an unchanged tree yields an empty diff.
+func TestDiffSinceUnchanged(t *testing.T) {
+	dir := newRepo(t, true)
+	write(t, dir, "extra.txt", "x\n")
+	before, err := SnapshotTree(context.Background(), dir)
+	if err != nil {
+		t.Fatalf("SnapshotTree: %v", err)
+	}
+	d, err := DiffSince(context.Background(), dir, before)
+	if err != nil {
+		t.Fatalf("DiffSince: %v", err)
+	}
+	if d != "" {
+		t.Errorf("diff = %q, want empty when nothing changed", d)
+	}
+}

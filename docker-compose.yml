@@ -4,11 +4,9 @@ services:
       context: .
       dockerfile: Dockerfile.whisper
     environment:
-      WHISPER_MODEL: ${WHISPER_MODEL:-small.en}
-      WHISPER_DEVICE: cpu
-      WHISPER_COMPUTE_TYPE: int8
+      PARAKEET_MODEL: ${PARAKEET_MODEL:-sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8}
+      PARAKEET_PROVIDER: ${PARAKEET_PROVIDER:-cpu}
       WHISPER_CPU_THREADS: ${WHISPER_CPU_THREADS:-8}
-      WHISPER_BEAM_SIZE: ${WHISPER_BEAM_SIZE:-1}
       WHISPER_DOWNLOAD_ROOT: /models
     ports:
       - "${WHISPER_PUBLISH:-8080:8080}"
@@ -52,7 +50,7 @@ services:
       dockerfile: Dockerfile.whisper
     entrypoint: ["python3", "/app/download_model.py"]
     environment:
-      WHISPER_MODEL: ${WHISPER_MODEL:-small.en}
+      PARAKEET_MODEL: ${PARAKEET_MODEL:-sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8}
       WHISPER_DOWNLOAD_ROOT: /models
     volumes:
       - whisper-models:/models
