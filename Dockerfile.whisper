@@ -1,0 +1,16 @@
+FROM ubuntu:24.04 AS build
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential cmake git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+RUN git clone --depth 1 https://github.com/ggml-org/whisper.cpp /src
+WORKDIR /src
+RUN cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
+    && cmake --build build -j --target whisper-server
+
+FROM ubuntu:24.04
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      curl ca-certificates libstdc++6 libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=build /src/build/bin/whisper-server /usr/local/bin/whisper-server
+COPY --from=build /src/models /opt/whisper-models
+ENTRYPOINT ["whisper-server"]
