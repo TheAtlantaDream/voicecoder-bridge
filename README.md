@@ -72,6 +72,26 @@ agentapi server --type=claude -- claude
 - `ANTHROPIC_API_KEY` and `ANTHROPIC_MODEL` must be set in the workspace where AgentAPI runs. Never commit them.
 - The bridge and AgentAPI must run on the same machine, because the bridge reads the diff from the project folder on disk.
 
+### AgentAPI with Docker Compose
+
+`docker-compose.yml` has an `agent` service that runs AgentAPI, Claude Code and git in one container. It and the bridge share one home volume, so both see the same project folder at `/home/coder/project`.
+
+```
+ANTHROPIC_API_KEY=... BRIDGE_AGENT=agentapi docker compose up --build
+```
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `BRIDGE_AGENT` | `none` | Passed to the bridge as `--agent`. Set `agentapi` to use the agent service. |
+| `ANTHROPIC_API_KEY` | empty | Key for Claude. Without it the agent service idles. Read it from the environment; never write it into a file in this repository. |
+| `ANTHROPIC_MODEL` | empty | Model Claude uses. Empty keeps Claude Code's default. |
+| `BRIDGE_ALLOWED_ORIGINS` | empty | Extra origins added to `--allowed-origins`. |
+| `VC_HOME_VOLUME`, `VC_HOME_EXTERNAL` | `voicecoder-agent-home`, `false` | Name of the shared home volume, and whether it already exists. A Coder workspace sets these to its own home volume. |
+
+- **Claude runs with `--dangerously-skip-permissions`.** It edits files and runs commands without asking. It can change anything in the shared home volume and reach the network.
+- The agent service creates the project folder and runs `git init` in it when they are missing.
+- Both containers run as user id 1000, the same as a Coder workspace.
+
 ### Claude directly (fallback)
 
 ```
@@ -182,6 +202,8 @@ With an agent set, text from the WebSocket becomes a coding task, so the bridge 
 
 - With `--agent=none`, every origin is allowed, as before.
 - With an agent, a page may connect only if its origin has the same scheme and host as an entry in `--allowed-origins`. The port must match too, except for `localhost` and `127.0.0.1`, which are allowed on any port.
+- A page served from the same host and port it connects to is allowed. This covers the web app when its own server forwards `/ws` to the bridge and keeps the `Host` header.
+- An entry may start with `*.` to allow every subdomain: `https://*.example.com` allows `https://app.example.com` but not `https://example.com`.
 - A connection with no `Origin` header is allowed. Tools that are not browsers, such as scripts, send none.
 - Everything else is refused with HTTP 403. That includes a page opened straight from disk, which sends the origin `null`.
 
@@ -190,6 +212,8 @@ To allow another site, pass the full list:
 ```
 ./bridge --agent=agentapi --allowed-origins http://localhost,https://app.example.com
 ```
+
+The `BRIDGE_ALLOWED_ORIGINS` environment variable adds entries to the list without replacing it.
 
 The bridge logs the chosen agent and the allowed origins at startup.
 

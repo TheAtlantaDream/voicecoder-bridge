@@ -9,13 +9,34 @@ services:
     volumes:
       - whisper-models:/models
 
+  # BRIDGE_AGENT=agentapi sends cleaned requests to the agent service. The
+  # default, none, only transcribes.
   bridge:
     build: .
-    command: --addr :8000 --whisper-url http://whisper:8080
+    command: >-
+      --addr :8000 --whisper-url http://whisper:8080
+      --agent ${BRIDGE_AGENT:-none} --agentapi-url http://agent:3284
+      --repo /home/coder/project
+    environment:
+      BRIDGE_ALLOWED_ORIGINS: ${BRIDGE_ALLOWED_ORIGINS:-}
     ports:
       - "${BRIDGE_PUBLISH:-8000:8000}"
+    volumes:
+      - agent-home:/home/coder
     depends_on:
       - whisper
+
+  # Claude Code behind AgentAPI. It idles unless ANTHROPIC_API_KEY is set.
+  agent:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    init: true
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-}
+    volumes:
+      - agent-home:/home/coder
 
   model-download:
     profiles:
@@ -30,3 +51,8 @@ services:
 
 volumes:
   whisper-models:
+  # The home folder the agent works in. In a Coder workspace this is the
+  # workspace's own home volume, so the editor shows the same project.
+  agent-home:
+    name: ${VC_HOME_VOLUME:-voicecoder-agent-home}
+    external: ${VC_HOME_EXTERNAL:-false}

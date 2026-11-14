@@ -79,8 +79,9 @@ func NewServer(t whisper.Transcriber, opts ...Option) *Server {
 }
 
 // originAllowed lets every page in when no agent is set, as before. With an
-// agent, text becomes a coding task, so only allowed pages and tools that
-// send no Origin header may connect. localhost matches on any port.
+// agent, text becomes a coding task, so only these may connect: tools that
+// send no Origin header, a page served from the same host it connects to
+// (the web app behind its own proxy), and pages on the allow list.
 func (s *Server) originAllowed(r *http.Request) bool {
 	if s.agent == nil {
 		return true
@@ -90,15 +91,18 @@ func (s *Server) originAllowed(r *http.Request) bool {
 		return true
 	}
 	got, err := url.Parse(origin)
-	if err != nil {
+	if err != nil || got.Host == "" {
 		return false
+	}
+	if strings.EqualFold(got.Host, r.Host) {
+		return true
 	}
 	for _, allowed := range s.origins {
 		want, err := url.Parse(strings.TrimSpace(allowed))
 		if err != nil || want.Host == "" {
 			continue
 		}
-		if !strings.EqualFold(got.Scheme, want.Scheme) || !strings.EqualFold(got.Hostname(), want.Hostname()) {
+		if !strings.EqualFold(got.Scheme, want.Scheme) || !hostMatches(want.Hostname(), got.Hostname()) {
 			continue
 		}
 		host := strings.ToLower(want.Hostname())
@@ -107,6 +111,17 @@ func (s *Server) originAllowed(r *http.Request) bool {
 		}
 	}
 	return false
+}
+
+// hostMatches compares host names without case. A pattern that starts with
+// "*." matches any subdomain, so "*.example.com" matches "app.example.com"
+// but not "example.com".
+func hostMatches(pattern, host string) bool {
+	pattern, host = strings.ToLower(pattern), strings.ToLower(host)
+	if suffix, ok := strings.CutPrefix(pattern, "*"); ok && strings.HasPrefix(suffix, ".") {
+		return len(host) > len(suffix) && strings.HasSuffix(host, suffix)
+	}
+	return pattern == host
 }
 
 type control struct {
