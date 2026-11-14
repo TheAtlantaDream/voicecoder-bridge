@@ -14,11 +14,12 @@ services:
     volumes:
       - whisper-models:/models
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://127.0.0.1:8080/"]
-      interval: 10s
-      timeout: 5s
-      retries: 30
-      start_period: 180s
+      # Liveness only — model load happens in the background after listen.
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:8080/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 30s
 
   # BRIDGE_AGENT=agentapi sends cleaned requests to the agent service. The
   # default, none, only transcribes.

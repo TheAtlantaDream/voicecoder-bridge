@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import tempfile
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 import numpy as np
-import sherpa_onnx
 import soundfile as sf
 from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.responses import JSONResponse, PlainTextResponse
@@ -18,10 +19,15 @@ MODEL_NAME = os.environ.get(
     "PARAKEET_MODEL",
     "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8",
 )
-CPU_THREADS = int(os.environ.get("WHISPER_CPU_THREADS", "8"))
+CPU_THREADS = int(os.environ.get("WHISPER_CPU_THREADS", "4"))
 PROVIDER = os.environ.get("PARAKEET_PROVIDER", "cpu")
 
-recognizer: sherpa_onnx.OfflineRecognizer | None = None
+log = logging.getLogger("voicecoder-parakeet")
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+
+recognizer = None
+load_error: str | None = None
+ready = threading.Event()
 
 
 def model_dir() -> Path:
@@ -35,10 +41,13 @@ def ensure_model() -> None:
         return
     from download_model import main as download_main
 
+    log.info("model missing; downloading %s", MODEL_NAME)
     download_main()
 
 
-def load_recognizer() -> sherpa_onnx.OfflineRecognizer:
+def load_recognizer():
+    import sherpa_onnx
+
     ensure_model()
     d = model_dir()
     encoder = d / "encoder.int8.onnx"
@@ -62,12 +71,25 @@ def load_recognizer() -> sherpa_onnx.OfflineRecognizer:
     )
 
 
+def load_in_background() -> None:
+    global recognizer, load_error
+    try:
+        log.info("loading %s (%s threads)", MODEL_NAME, CPU_THREADS)
+        recognizer = load_recognizer()
+        load_error = None
+        log.info("model ready")
+    except Exception as exc:  # noqa: BLE001 — surface any load failure in /ready
+        load_error = f"{type(exc).__name__}: {exc}"
+        log.exception("model load failed: %s", load_error)
+    finally:
+        ready.set()
+
+
 def to_mono_float32(path: str) -> tuple[np.ndarray, int]:
     audio, sample_rate = sf.read(path, dtype="float32", always_2d=True)
     mono = audio[:, 0]
     if sample_rate == 16000:
         return mono, sample_rate
-    # Linear resample to 16 kHz (bridge always sends 16 kHz WAV).
     n = int(round(len(mono) * 16000 / sample_rate))
     if n <= 0:
         return np.zeros(0, dtype=np.float32), 16000
@@ -78,16 +100,32 @@ def to_mono_float32(path: str) -> tuple[np.ndarray, int]:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    global recognizer
-    recognizer = load_recognizer()
+    # Serve health immediately; model load can take minutes on first boot.
+    threading.Thread(target=load_in_background, name="parakeet-load", daemon=True).start()
     yield
 
 
 app = FastAPI(title="voicecoder-parakeet", lifespan=lifespan)
 
 
+@app.get("/healthz")
+def healthz():
+    """Liveness: process is up (used by Docker healthcheck)."""
+    return {"status": "ok"}
+
+
 @app.get("/")
+@app.get("/ready")
 def root():
+    if recognizer is None:
+        body = {
+            "status": "starting" if not ready.is_set() else "error",
+            "engine": "parakeet-tdt",
+            "model": MODEL_NAME,
+            "provider": PROVIDER,
+            "error": load_error,
+        }
+        return JSONResponse(body, status_code=503)
     return {
         "status": "ok",
         "engine": "parakeet-tdt",
@@ -103,7 +141,10 @@ async def inference(
 ):
     """Match whisper-server's multipart /inference used by the bridge."""
     if recognizer is None:
-        return JSONResponse({"error": "model not loaded"}, status_code=503)
+        return JSONResponse(
+            {"error": load_error or "model not loaded yet"},
+            status_code=503,
+        )
 
     raw = await file.read()
     suffix = os.path.splitext(file.filename or "audio.wav")[1] or ".wav"
