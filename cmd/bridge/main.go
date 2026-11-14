@@ -38,15 +38,16 @@ func main() {
 	case "none":
 		log.Printf("agent: none (transcribe and clean only)")
 	case "fake":
-		opts = append(opts, bridge.WithAgent(agent.Fake{Delay: time.Second}))
-		log.Printf("agent: fake (no code is changed)")
+		dir := expandHome(*repo)
+		opts = append(opts, bridge.WithAgent(agent.Fake{Delay: time.Second}), bridge.WithRepo(dir))
+		log.Printf("agent: fake (no code is changed) repo=%s", dir)
 	case "agentapi":
 		dir := expandHome(*repo)
-		opts = append(opts, bridge.WithAgent(agent.NewAgentAPI(*agentAPIURL, dir, *agentTimeout)))
+		opts = append(opts, bridge.WithAgent(agent.NewAgentAPI(*agentAPIURL, dir, *agentTimeout)), bridge.WithRepo(dir))
 		log.Printf("agent: agentapi url=%s repo=%s timeout=%s", *agentAPIURL, dir, *agentTimeout)
 	case "claude":
 		dir := expandHome(*repo)
-		opts = append(opts, bridge.WithAgent(agent.NewClaude(dir, *agentTimeout)))
+		opts = append(opts, bridge.WithAgent(agent.NewClaude(dir, *agentTimeout)), bridge.WithRepo(dir))
 		log.Printf("agent: claude (direct command, no AgentAPI) repo=%s timeout=%s", dir, *agentTimeout)
 	default:
 		log.Fatalf("unknown -agent %q, want none, fake, agentapi, or claude", *agentName)

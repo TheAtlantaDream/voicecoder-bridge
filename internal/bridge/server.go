@@ -32,9 +32,10 @@ type Server struct {
 	silenceRMS  float64
 	silenceFor  time.Duration
 	agent       agent.Agent
+	repo        string
 	origins     []string
 	// progressEvery is how often a running agent reports that it is still
-	// working. Tests shorten it.
+	// working when no partials have arrived yet. Tests shorten it.
 	progressEvery time.Duration
 }
 
@@ -52,6 +53,14 @@ func WithSilence(rms float64, d time.Duration) Option {
 func WithAgent(a agent.Agent) Option {
 	return func(s *Server) {
 		s.agent = a
+	}
+}
+
+// WithRepo is the project folder used to write .voicecoder/latest.diff after
+// an agent run so the editor can open the patch.
+func WithRepo(repo string) Option {
+	return func(s *Server) {
+		s.repo = repo
 	}
 }
 
@@ -139,6 +148,7 @@ type outbound struct {
 type session struct {
 	mu            sync.Mutex
 	listening     bool
+	armed         bool // false after an explicit stop until the client sends start
 	audio         []byte
 	partials      map[int]string
 	nextSeq       int
@@ -242,25 +252,13 @@ func (s *Server) transcribeChunk(ctx context.Context, sess *session, send func(o
 func (s *Server) handleControl(ctx context.Context, sess *session, send func(outbound), c control) {
 	switch c.Type {
 	case "start":
-		sess.mu.Lock()
-		if sess.cancel != nil {
-			sess.cancel()
-		}
-		sess.runCtx, sess.cancel = context.WithCancel(ctx)
-		sess.listening = true
-		sess.audio = sess.audio[:0]
-		sess.partials = make(map[int]string)
-		sess.nextSeq = 0
-		sess.speechStarted = false
-		sess.lastSpeechAt = time.Time{}
-		runCtx := sess.runCtx
-		sess.mu.Unlock()
-		go s.watchSilence(runCtx, sess, send)
+		s.armListening(ctx, sess, send)
 	case "end":
 		s.endUtterance(sess, send)
 	case "stop":
 		sess.mu.Lock()
 		sess.listening = false
+		sess.armed = false
 		sess.audio = sess.audio[:0]
 		sess.partials = make(map[int]string)
 		if sess.cancel != nil {
@@ -285,6 +283,26 @@ func (s *Server) handleControl(ctx context.Context, sess *session, send func(out
 	}
 }
 
+// armListening begins (or restarts) accepting audio for the next utterance.
+func (s *Server) armListening(ctx context.Context, sess *session, send func(outbound)) {
+	sess.mu.Lock()
+	if sess.cancel != nil {
+		sess.cancel()
+	}
+	sess.runCtx, sess.cancel = context.WithCancel(ctx)
+	sess.listening = true
+	sess.armed = true
+	sess.audio = sess.audio[:0]
+	sess.partials = make(map[int]string)
+	sess.nextSeq = 0
+	sess.speechStarted = false
+	sess.lastSpeechAt = time.Time{}
+	runCtx := sess.runCtx
+	sess.mu.Unlock()
+	send(outbound{Type: "status", Text: "Listening for hey VoiceCoder…"})
+	go s.watchSilence(runCtx, sess, send)
+}
+
 func (s *Server) finishUtterance(ctx context.Context, sess *session, send func(outbound)) {
 	sess.pending.Wait()
 
@@ -301,17 +319,45 @@ func (s *Server) finishUtterance(ctx context.Context, sess *session, send func(o
 		}
 		joined += sess.partials[seq]
 	}
+	armed := sess.armed
+	base := sess.baseCtx
 	sess.mu.Unlock()
+
+	rearm := func() {
+		if !armed {
+			return
+		}
+		if base == nil {
+			base = context.Background()
+		}
+		s.armListening(base, sess, send)
+	}
 
 	if joined == "" {
 		send(outbound{Type: "error", Text: "I did not hear anything. Try again, a little closer to the mic."})
+		rearm()
 		return
 	}
 	send(outbound{Type: "transcript", Text: joined})
 
+	// Spoken requests need the wake word. Stop/cancel still work without it.
+	if isStopWord(clean.StripWakeWord(joined)) || isStopWord(joined) {
+		cleaned := clean.Clean(joined)
+		send(outbound{Type: "cleaned", Text: cleaned})
+		s.submit(ctx, sess, send, cleaned)
+		rearm()
+		return
+	}
+	if !clean.HasWakeWord(joined) {
+		send(outbound{Type: "status", Text: "Say hey VoiceCoder, then your request."})
+		rearm()
+		return
+	}
+
 	cleaned := clean.Clean(joined)
 	send(outbound{Type: "cleaned", Text: cleaned})
 	s.submit(ctx, sess, send, cleaned)
+	rearm()
 }
 
 // cancelAgent stops the session's agent run and reports whether one was
@@ -368,13 +414,20 @@ func (s *Server) submit(ctx context.Context, sess *session, send func(outbound),
 			err error
 		}
 		done := make(chan outcome, 1)
+		gotPartial := false
+		var partialMu sync.Mutex
 		go func() {
-			res, err := s.agent.Run(agentCtx, cleaned)
+			res, err := s.agent.Run(agentCtx, cleaned, func(text string) {
+				partialMu.Lock()
+				gotPartial = true
+				partialMu.Unlock()
+				send(outbound{Type: "agent_partial", Text: text})
+			})
 			done <- outcome{res, err}
 		}()
 
-		// Say so every progressEvery while the run goes on, so the user is
-		// not left in silence. Progress stops once the run is cancelled.
+		// Say so every progressEvery while the run goes on with no partials,
+		// so the user is not left in silence.
 		started := time.Now()
 		tick := time.NewTicker(s.progressEvery)
 		defer tick.Stop()
@@ -388,6 +441,12 @@ func (s *Server) submit(ctx context.Context, sess *session, send func(outbound),
 				out = <-done
 				break wait
 			case <-tick.C:
+				partialMu.Lock()
+				has := gotPartial
+				partialMu.Unlock()
+				if has {
+					continue
+				}
 				secs := int(time.Since(started).Round(time.Second).Seconds())
 				send(outbound{Type: "status", Text: fmt.Sprintf("Still working, %d seconds so far.", secs)})
 			}
@@ -408,6 +467,11 @@ func (s *Server) submit(ctx context.Context, sess *session, send func(outbound),
 		if err != nil {
 			send(outbound{Type: "error", Text: err.Error()})
 			return
+		}
+		if s.repo != "" {
+			if werr := agent.WriteLatestDiff(s.repo, res.Diff); werr != nil {
+				log.Printf("write latest.diff: %v", werr)
+			}
 		}
 		send(outbound{Type: "agent_result", Text: res.Summary, Diff: res.Diff})
 	}()

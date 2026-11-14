@@ -31,7 +31,7 @@ type claudeOutput struct {
 	Result  string `json:"result"`
 }
 
-func (c *Claude) Run(ctx context.Context, prompt string) (Result, error) {
+func (c *Claude) Run(ctx context.Context, prompt string, onUpdate UpdateFunc) (Result, error) {
 	runCtx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
@@ -67,6 +67,9 @@ func (c *Claude) Run(ctx context.Context, prompt string) (Result, error) {
 	summary := strings.TrimSpace(out.Result)
 	if summary == "" {
 		summary = noSummary
+	}
+	if onUpdate != nil {
+		onUpdate(summary)
 	}
 
 	diff, err := Diff(runCtx, c.repo)

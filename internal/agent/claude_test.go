@@ -31,7 +31,7 @@ pwd > cwd.txt
 echo "package a" > new.go
 printf '%s\n' '{"type":"result","is_error":false,"result":" I added new.go. \n"}'`)
 
-	res, err := NewClaude(repo, 5*time.Second).Run(context.Background(), "add a file")
+	res, err := NewClaude(repo, 5*time.Second).Run(context.Background(), "add a file", nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -56,7 +56,7 @@ printf '%s\n' '{"type":"result","is_error":false,"result":" I added new.go. \n"}
 
 func TestClaudeNoSummary(t *testing.T) {
 	stubClaude(t, `echo '{"type":"result","is_error":false,"result":""}'`)
-	res, err := NewClaude(newRepo(t, true), 5*time.Second).Run(context.Background(), "do nothing")
+	res, err := NewClaude(newRepo(t, true), 5*time.Second).Run(context.Background(), "do nothing", nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestClaudeFailures(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			stubClaude(t, tc.script)
-			_, err := NewClaude(newRepo(t, true), 5*time.Second).Run(context.Background(), "x")
+			_, err := NewClaude(newRepo(t, true), 5*time.Second).Run(context.Background(), "x", nil)
 			if err != errClaudeFailed {
 				t.Errorf("err = %v, want %v", err, errClaudeFailed)
 			}
@@ -88,7 +88,7 @@ func TestClaudeFailures(t *testing.T) {
 func TestClaudeTimeout(t *testing.T) {
 	stubClaude(t, `exec sleep 30`)
 	start := time.Now()
-	_, err := NewClaude(newRepo(t, true), 100*time.Millisecond).Run(context.Background(), "x")
+	_, err := NewClaude(newRepo(t, true), 100*time.Millisecond).Run(context.Background(), "x", nil)
 	if err != errTimeout {
 		t.Errorf("err = %v, want %v", err, errTimeout)
 	}
@@ -102,7 +102,7 @@ func TestClaudeCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	time.AfterFunc(100*time.Millisecond, cancel)
 	start := time.Now()
-	_, err := NewClaude(newRepo(t, true), 30*time.Second).Run(ctx, "x")
+	_, err := NewClaude(newRepo(t, true), 30*time.Second).Run(ctx, "x", nil)
 	if err != errStopped {
 		t.Errorf("err = %v, want %v", err, errStopped)
 	}
@@ -113,7 +113,7 @@ func TestClaudeCancel(t *testing.T) {
 
 func TestClaudeNotInstalled(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
-	_, err := NewClaude(t.TempDir(), 5*time.Second).Run(context.Background(), "x")
+	_, err := NewClaude(t.TempDir(), 5*time.Second).Run(context.Background(), "x", nil)
 	if err != errUnreachable {
 		t.Errorf("err = %v, want %v", err, errUnreachable)
 	}

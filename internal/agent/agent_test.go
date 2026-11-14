@@ -16,7 +16,7 @@ var _ Agent = Fake{}
 // TestFakeIsLabeled checks that a fake result can never be mistaken for a
 // real one: its summary always starts with the fake label.
 func TestFakeIsLabeled(t *testing.T) {
-	res, err := Fake{}.Run(context.Background(), "fix the login bug")
+	res, err := Fake{}.Run(context.Background(), "fix the login bug", nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -34,7 +34,7 @@ func TestFakeStopsOnCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		_, err := Fake{Delay: time.Minute}.Run(ctx, "anything")
+		_, err := Fake{Delay: time.Minute}.Run(ctx, "anything", nil)
 		done <- err
 	}()
 	cancel()

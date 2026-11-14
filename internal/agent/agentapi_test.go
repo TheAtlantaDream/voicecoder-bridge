@@ -93,7 +93,7 @@ func newClient(t *testing.T, f *fakeAgentAPI, repo string, timeout time.Duration
 
 // TestAgentAPIHappyPath checks the whole run: the prompt is sent as a user
 // message, and the result is the agent's last new reply, un-wrapped, plus
-// the diff of the project folder.
+// the diff of the project folder. Partials are streamed via onUpdate.
 func TestAgentAPIHappyPath(t *testing.T) {
 	repo := newRepo(t, true)
 	write(t, repo, "tracked.txt", "two\n")
@@ -104,7 +104,10 @@ func TestAgentAPIHappyPath(t *testing.T) {
 	}
 	a := newClient(t, f, repo, time.Minute)
 
-	res, err := a.Run(context.Background(), "change one to two")
+	var partials []string
+	res, err := a.Run(context.Background(), "change one to two", func(text string) {
+		partials = append(partials, text)
+	})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -114,6 +117,9 @@ func TestAgentAPIHappyPath(t *testing.T) {
 	}
 	if !strings.Contains(res.Diff, "+two") {
 		t.Errorf("diff = %q, want the change to tracked.txt", res.Diff)
+	}
+	if len(partials) == 0 || partials[len(partials)-1] != want {
+		t.Errorf("partials = %q, want the final summary streamed", partials)
 	}
 	if got := f.userSent(); len(got) != 1 || got[0] != "change one to two" {
 		t.Errorf("user messages sent = %q, want the prompt once", got)
@@ -129,7 +135,7 @@ func TestAgentAPIBusy(t *testing.T) {
 	f := &fakeAgentAPI{status: "running", pollsUntilStable: -1}
 	a := newClient(t, f, newRepo(t, true), time.Minute)
 
-	_, err := a.Run(context.Background(), "anything")
+	_, err := a.Run(context.Background(), "anything", nil)
 	if err != errBusy {
 		t.Errorf("err = %v, want the busy error", err)
 	}
@@ -144,7 +150,7 @@ func TestAgentAPITimeout(t *testing.T) {
 	f := &fakeAgentAPI{pollsUntilStable: -1}
 	a := newClient(t, f, newRepo(t, true), 50*time.Millisecond)
 
-	_, err := a.Run(context.Background(), "a huge request")
+	_, err := a.Run(context.Background(), "a huge request", nil)
 	if err != errTimeout {
 		t.Errorf("err = %v, want the timeout error", err)
 	}
@@ -160,7 +166,7 @@ func TestAgentAPICancel(t *testing.T) {
 	f := &fakeAgentAPI{pollsUntilStable: -1, onRunning: cancel}
 	a := newClient(t, f, newRepo(t, true), time.Minute)
 
-	_, err := a.Run(ctx, "something slow")
+	_, err := a.Run(ctx, "something slow", nil)
 	if err != errStopped {
 		t.Errorf("err = %v, want the stopped error", err)
 	}
@@ -177,7 +183,7 @@ func TestAgentAPINoNewMessage(t *testing.T) {
 	}
 	a := newClient(t, f, newRepo(t, true), time.Minute)
 
-	res, err := a.Run(context.Background(), "do nothing")
+	res, err := a.Run(context.Background(), "do nothing", nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -193,7 +199,7 @@ func TestAgentAPIDown(t *testing.T) {
 	url := srv.URL
 	srv.Close()
 
-	_, err := NewAgentAPI(url, t.TempDir(), time.Minute).Run(context.Background(), "anything")
+	_, err := NewAgentAPI(url, t.TempDir(), time.Minute).Run(context.Background(), "anything", nil)
 	if err != errUnreachable {
 		t.Errorf("err = %v, want the unreachable error", err)
 	}

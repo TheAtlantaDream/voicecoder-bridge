@@ -143,6 +143,7 @@ Every message is JSON with a `type` and a `text`:
 | `transcript` | | The whole spoken request, joined in order. |
 | `cleaned` | | The request after cleaning. This is what the agent receives. |
 | `status` | | A short line to show or read aloud. See the list below. |
+| `agent_partial` | | Live agent reply text while a task runs. Only with an agent that streams. |
 | `agent_result` | `diff` | The task finished. `text` is the agent's summary and `diff` is the code changes. Only sent when an agent is set. |
 | `error` | | Something failed. `text` is a plain sentence for the user. |
 
@@ -152,20 +153,25 @@ Example result:
 {"type":"agent_result","text":"I added add(a, b) to math_utils.py and a test. The test passes.","diff":"diff --git a/math_utils.py b/math_utils.py\n..."}
 ```
 
-A typed request with an agent set gives, in order: `cleaned`, `status` "Working on it.", zero or more progress `status` lines, then `agent_result` or `error`.
+A typed request with an agent set gives, in order: `cleaned`, `status` "Working on it.", zero or more `agent_partial` lines (or progress `status` if none yet), then `agent_result` or `error`.
+
+Spoken requests must start with "hey VoiceCoder" (or "VoiceCoder"). Without the wake word the bridge sends a status reminder and keeps listening. After each spoken utterance it re-arms automatically so the mic can stay open. Typed `text` does not need the wake word.
 
 ### The `diff` field
 
 - `diff` is everything in the project folder that is not yet approved (committed): staged and unstaged edits, and new files. Ignored files are left out.
 - It is not only the last request. If two requests ran and neither was approved, the diff shows both.
 - It is empty, and the field is left out of the JSON, when nothing is waiting for approval. That is the case right after an approve.
+- The same text is also written to `.voicecoder/latest.diff` in the project folder (gitignored) so the web app can open it in VS Code.
 
 ### Status messages
 
 | Text | When |
 | --- | --- |
+| `Listening for hey VoiceCoder…` | The bridge is armed and accepting audio. |
+| `Say hey VoiceCoder, then your request.` | Speech ended without the wake word. |
 | `Working on it.` | A task was sent to the agent. |
-| `Still working, N seconds so far.` | Every 10 seconds while a task runs. |
+| `Still working, N seconds so far.` | Every 10 seconds while a task runs and no `agent_partial` has arrived yet. |
 | `Still working on your last request. Say stop to cancel it.` | A new request arrived while a task was running. The new request is dropped. |
 | `Stopped. Some files may have changed.` | A running task was stopped. |
 | `Stopped. Nothing was kept.` | Stop arrived with no task running. |

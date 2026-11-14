@@ -1,11 +1,13 @@
 package agent
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"regexp"
 	"strings"
@@ -57,7 +59,7 @@ type apiMessage struct {
 	Content string `json:"content"`
 }
 
-func (a *AgentAPI) Run(ctx context.Context, prompt string) (Result, error) {
+func (a *AgentAPI) Run(ctx context.Context, prompt string, onUpdate UpdateFunc) (Result, error) {
 	runCtx, cancel := context.WithTimeout(ctx, a.timeout)
 	defer cancel()
 
@@ -86,6 +88,7 @@ func (a *AgentAPI) Run(ctx context.Context, prompt string) (Result, error) {
 	if err != nil {
 		return fail(errUnreachable)
 	}
+	beforeLen := len(before)
 
 	sent = true
 	code, err := a.post(runCtx, "user", prompt)
@@ -97,20 +100,52 @@ func (a *AgentAPI) Run(ctx context.Context, prompt string) (Result, error) {
 		return fail(errRejected)
 	}
 
-	tick := time.NewTicker(a.poll)
-	defer tick.Stop()
-	for {
-		select {
-		case <-runCtx.Done():
-			return fail(runCtx.Err())
-		case <-tick.C:
+	lastPartial := ""
+	emit := func(text string) {
+		text = unwrap(text)
+		if text == "" || text == lastPartial || onUpdate == nil {
+			return
 		}
-		status, err := a.status(runCtx)
-		if err != nil {
-			return fail(errUnreachable)
+		lastPartial = text
+		onUpdate(text)
+	}
+
+	// Prefer SSE for live updates; fall back to polling /messages.
+	useSSE := a.streamEvents(runCtx, beforeLen, emit)
+	if !useSSE {
+		tick := time.NewTicker(a.poll)
+		defer tick.Stop()
+		for {
+			select {
+			case <-runCtx.Done():
+				return fail(runCtx.Err())
+			case <-tick.C:
+			}
+			a.emitLatestAgent(runCtx, beforeLen, emit)
+			status, err := a.status(runCtx)
+			if err != nil {
+				return fail(errUnreachable)
+			}
+			if status == "stable" {
+				break
+			}
 		}
-		if status == "stable" {
-			break
+	} else {
+		// SSE ended because status went stable or the stream closed; confirm.
+		for {
+			status, err := a.status(runCtx)
+			if err != nil {
+				return fail(errUnreachable)
+			}
+			if status == "stable" {
+				break
+			}
+			select {
+			case <-runCtx.Done():
+				return fail(runCtx.Err())
+			case <-time.After(a.poll):
+			}
+			a.emitLatestAgent(runCtx, beforeLen, emit)
 		}
 	}
 
@@ -119,7 +154,7 @@ func (a *AgentAPI) Run(ctx context.Context, prompt string) (Result, error) {
 		return fail(errUnreachable)
 	}
 	summary := ""
-	for i := len(after) - 1; i >= len(before); i-- {
+	for i := len(after) - 1; i >= beforeLen; i-- {
 		if after[i].Role == "agent" {
 			summary = unwrap(after[i].Content)
 			break
@@ -128,12 +163,113 @@ func (a *AgentAPI) Run(ctx context.Context, prompt string) (Result, error) {
 	if summary == "" {
 		summary = noSummary
 	}
+	if onUpdate != nil && summary != lastPartial {
+		onUpdate(summary)
+	}
 
 	diff, err := Diff(runCtx, a.repo)
 	if err != nil {
 		return fail(errNoDiff)
 	}
 	return Result{Summary: summary, Diff: diff}, nil
+}
+
+func (a *AgentAPI) emitLatestAgent(ctx context.Context, beforeLen int, emit func(string)) {
+	msgs, err := a.messages(ctx)
+	if err != nil {
+		return
+	}
+	for i := len(msgs) - 1; i >= beforeLen; i-- {
+		if msgs[i].Role == "agent" {
+			emit(msgs[i].Content)
+			return
+		}
+	}
+}
+
+// streamEvents reads GET /events. It returns true if the stream was used
+// (even briefly). false means the caller should poll instead.
+func (a *AgentAPI) streamEvents(ctx context.Context, beforeLen int, emit func(string)) bool {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.baseURL+"/events", nil)
+	if err != nil {
+		return false
+	}
+	req.Header.Set("Accept", "text/event-stream")
+	resp, err := a.client.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return false
+	}
+
+	reader := bufio.NewReader(resp.Body)
+	var dataLines []string
+	sawEvent := false
+	for {
+		line, err := reader.ReadString('\n')
+		if len(line) > 0 {
+			sawEvent = true
+			trimmed := strings.TrimRight(line, "\r\n")
+			switch {
+			case trimmed == "":
+				if len(dataLines) > 0 {
+					payload := strings.Join(dataLines, "\n")
+					dataLines = dataLines[:0]
+					a.handleSSEData(ctx, payload, beforeLen, emit)
+					if st, stErr := a.status(ctx); stErr == nil && st == "stable" {
+						return true
+					}
+				}
+			case strings.HasPrefix(trimmed, "data:"):
+				dataLines = append(dataLines, strings.TrimSpace(strings.TrimPrefix(trimmed, "data:")))
+			}
+		}
+		if err != nil {
+			if errors.Is(err, io.EOF) || ctx.Err() != nil {
+				return sawEvent
+			}
+			return sawEvent
+		}
+	}
+}
+
+func (a *AgentAPI) handleSSEData(ctx context.Context, payload string, beforeLen int, emit func(string)) {
+	var evt struct {
+		Type    string `json:"type"`
+		Status  string `json:"status"`
+		Role    string `json:"role"`
+		Content string `json:"content"`
+		Message *struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		} `json:"message"`
+	}
+	if err := json.Unmarshal([]byte(payload), &evt); err != nil {
+		// Some AgentAPI builds send bare message objects; try that.
+		var msg apiMessage
+		if json.Unmarshal([]byte(payload), &msg) == nil && msg.Role == "agent" && msg.Content != "" {
+			emit(msg.Content)
+		} else {
+			a.emitLatestAgent(ctx, beforeLen, emit)
+		}
+		return
+	}
+	switch {
+	case evt.Message != nil && evt.Message.Role == "agent" && evt.Message.Content != "":
+		emit(evt.Message.Content)
+	case evt.Role == "agent" && evt.Content != "":
+		emit(evt.Content)
+	case evt.Type == "message_update" || evt.Type == "agent_message" || evt.Content != "":
+		if evt.Content != "" {
+			emit(evt.Content)
+		} else {
+			a.emitLatestAgent(ctx, beforeLen, emit)
+		}
+	default:
+		a.emitLatestAgent(ctx, beforeLen, emit)
+	}
 }
 
 func (a *AgentAPI) status(ctx context.Context) (string, error) {

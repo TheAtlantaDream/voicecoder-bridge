@@ -10,8 +10,12 @@ import (
 	"time"
 )
 
+// UpdateFunc receives the latest agent reply text while a run is in progress.
+// Implementations may call it zero or more times. nil is allowed.
+type UpdateFunc func(text string)
+
 type Agent interface {
-	Run(ctx context.Context, prompt string) (Result, error)
+	Run(ctx context.Context, prompt string, onUpdate UpdateFunc) (Result, error)
 }
 
 // Result is what comes back from one request: Summary is read aloud,
@@ -36,16 +40,24 @@ type Fake struct {
 	Delay time.Duration
 }
 
-func (f Fake) Run(ctx context.Context, prompt string) (Result, error) {
+func (f Fake) Run(ctx context.Context, prompt string, onUpdate UpdateFunc) (Result, error) {
+	summary := FakeLabel + " No code was changed. The request was: " + prompt
+	if onUpdate != nil {
+		onUpdate(FakeLabel + " Working on: " + prompt)
+		select {
+		case <-ctx.Done():
+			return Result{}, ctx.Err()
+		case <-time.After(f.Delay / 2):
+		}
+		onUpdate(summary)
+	}
 	select {
 	case <-ctx.Done():
 		return Result{}, ctx.Err()
-	case <-time.After(f.Delay):
+	case <-time.After(f.Delay / 2):
 	}
-	return Result{
-		Summary: FakeLabel + " No code was changed. The request was: " + prompt,
-		Diff:    fakeDiff,
-	}, nil
+	res := Result{Summary: summary, Diff: fakeDiff}
+	return res, nil
 }
 
 // emptyTree is git's well-known empty tree, the base for a repo with no commits.

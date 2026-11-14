@@ -144,6 +144,7 @@ type stubAgent struct {
 	stopped chan struct{}
 	release chan struct{}
 	result  agent.Result
+	stream  bool // when true, emit an agent_partial via onUpdate
 }
 
 func newStubAgent() *stubAgent {
@@ -155,8 +156,11 @@ func newStubAgent() *stubAgent {
 	}
 }
 
-func (a *stubAgent) Run(ctx context.Context, prompt string) (agent.Result, error) {
+func (a *stubAgent) Run(ctx context.Context, prompt string, onUpdate agent.UpdateFunc) (agent.Result, error) {
 	a.started <- prompt
+	if a.stream && onUpdate != nil {
+		onUpdate("Working…")
+	}
 	select {
 	case <-ctx.Done():
 		a.stopped <- struct{}{}
@@ -235,9 +239,10 @@ const (
 )
 
 // TestTypedRequestRunsAgent checks the typed path end to end: cleaned,
-// then "Working on it.", then the agent's summary and diff.
+// then "Working on it.", streaming partial, then the agent's summary and diff.
 func TestTypedRequestRunsAgent(t *testing.T) {
 	stub := newStubAgent()
+	stub.stream = true
 	srv := NewServer(&fakeTranscriber{}, WithAgent(stub))
 	sess := &session{partials: make(map[int]string)}
 	c := &collector{}
@@ -252,12 +257,29 @@ func TestTypedRequestRunsAgent(t *testing.T) {
 	if res.Text != stub.result.Summary || res.Diff != stub.result.Diff {
 		t.Errorf("agent_result = %+v, want the agent's summary and diff", res)
 	}
-	got := c.all()
-	if len(got) != 3 || got[0].Type != "cleaned" || got[1] != (outbound{Type: "status", Text: "Working on it."}) || got[2].Type != "agent_result" {
-		t.Errorf("messages = %+v, want cleaned, Working on it., agent_result", got)
+	if !c.has("status", "Working on it.") || !c.has("agent_partial", "Working…") {
+		t.Errorf("messages = %+v, want Working on it. and an agent_partial", c.all())
 	}
 	if agentRunning(sess) {
 		t.Errorf("session still marks a run in progress after the result")
+	}
+}
+
+// TestSpokenWithoutWakeWord ignores speech that lacks the wake word.
+func TestSpokenWithoutWakeWord(t *testing.T) {
+	stub := newStubAgent()
+	srv := NewServer(&fakeTranscriber{}, WithAgent(stub))
+	sess := &session{partials: map[int]string{0: "fix the login bug"}, armed: true, baseCtx: context.Background()}
+	c := &collector{}
+
+	srv.finishUtterance(context.Background(), sess, c.send)
+	if !c.has("status", "Say hey VoiceCoder, then your request.") {
+		t.Errorf("messages = %+v, want the wake-word reminder", c.all())
+	}
+	select {
+	case prompt := <-stub.started:
+		t.Errorf("agent got %q, want nothing without the wake word", prompt)
+	case <-time.After(50 * time.Millisecond):
 	}
 }
 
@@ -265,7 +287,7 @@ func TestTypedRequestRunsAgent(t *testing.T) {
 func TestSpokenRequestRunsAgent(t *testing.T) {
 	stub := newStubAgent()
 	srv := NewServer(&fakeTranscriber{}, WithAgent(stub))
-	sess := &session{partials: map[int]string{0: "hey VoiceCoder fix the login bug"}}
+	sess := &session{partials: map[int]string{0: "hey VoiceCoder fix the login bug"}, armed: true, baseCtx: context.Background()}
 	c := &collector{}
 
 	srv.finishUtterance(context.Background(), sess, c.send)
