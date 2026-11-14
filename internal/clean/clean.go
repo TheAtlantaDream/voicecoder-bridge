@@ -7,7 +7,7 @@ import (
 
 var (
 	// Wake phrases, case-insensitive, only at the start of the utterance.
-	wakeRe = regexp.MustCompile(`(?i)^\s*(hey\s+)?voice\s*coder[,\s]*`)
+	wakeRe = regexp.MustCompile(`(?i)^\s*(hey\s+)?voice\s*coder[.,\s]*`)
 
 	// Spoken "dot" between two word characters: "auth dot py" -> "auth.py".
 	// The spaces around "dot" are consumed so no stray space remains.

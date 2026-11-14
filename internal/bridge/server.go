@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"regexp"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/gorilla/websocket"
@@ -14,6 +16,8 @@ import (
 )
 
 const chunkBytes = 64000
+
+var blankRe = regexp.MustCompile(`\[.*?\]`)
 
 type Server struct {
 	transcriber whisper.Transcriber
@@ -36,7 +40,7 @@ type control struct {
 
 type outbound struct {
 	Type string `json:"type"`
-	Seq  int    `json:"seq,omitempty"`
+	Seq  int    `json:"seq"`
 	Text string `json:"text,omitempty"`
 }
 
@@ -116,6 +120,7 @@ func (s *Server) transcribeChunk(ctx context.Context, sess *session, send func(o
 		send(outbound{Type: "error", Text: "Whisper failed on one chunk, continuing: " + err.Error()})
 		return
 	}
+	text = strings.TrimSpace(blankRe.ReplaceAllString(text, ""))
 	if text == "" {
 		return
 	}
