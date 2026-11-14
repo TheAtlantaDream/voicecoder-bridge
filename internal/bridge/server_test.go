@@ -433,7 +433,7 @@ func TestNoAgentUnchanged(t *testing.T) {
 
 func TestOriginCheck(t *testing.T) {
 	withAgent := NewServer(&fakeTranscriber{}, WithAgent(newStubAgent()),
-		WithAllowedOrigins([]string{"http://localhost", "http://127.0.0.1", "https://coder.example.com"}))
+		WithAllowedOrigins([]string{"http://localhost", "http://127.0.0.1", "https://coder.example.com", "https://*.apps.example.org"}))
 	noAgent := NewServer(&fakeTranscriber{})
 
 	cases := []struct {
@@ -451,10 +451,17 @@ func TestOriginCheck(t *testing.T) {
 		{"allowed host with the wrong scheme", withAgent, "http://coder.example.com", false},
 		{"host that only starts like localhost", withAgent, "http://localhost.evil.example.com", false},
 		{"page opened as a file", withAgent, "null", false},
+		{"subdomain of a wildcard origin", withAgent, "https://frontend--ws--user.apps.example.org", true},
+		{"wildcard does not match the bare domain", withAgent, "https://apps.example.org", false},
+		{"wildcard does not match a lookalike suffix", withAgent, "https://evilapps.example.org", false},
+		{"wildcard with the wrong scheme", withAgent, "http://x.apps.example.org", false},
+		{"same host the page connects to", withAgent, "https://bridge.test", true},
+		{"same host with different case", withAgent, "https://BRIDGE.test", true},
+		{"same host name on another port", withAgent, "https://bridge.test:8443", false},
 		{"no agent allows every origin", noAgent, "https://evil.example.com", true},
 	}
 	for _, tc := range cases {
-		r := httptest.NewRequest(http.MethodGet, "/ws", nil)
+		r := httptest.NewRequest(http.MethodGet, "http://bridge.test/ws", nil)
 		if tc.origin != "" {
 			r.Header.Set("Origin", tc.origin)
 		}

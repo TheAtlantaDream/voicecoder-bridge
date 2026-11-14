@@ -1,0 +1,19 @@
+# Claude Code behind AgentAPI. The bridge sends coding tasks here.
+FROM node:22-bookworm-slim
+ARG TARGETARCH
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      git curl ca-certificates jq \
+    && rm -rf /var/lib/apt/lists/*
+RUN npm install -g @anthropic-ai/claude-code \
+    && curl -fsSL -o /usr/local/bin/agentapi \
+      "https://github.com/coder/agentapi/releases/latest/download/agentapi-linux-${TARGETARCH:-amd64}" \
+    && chmod +x /usr/local/bin/agentapi
+COPY agent-entrypoint.sh /usr/local/bin/agent-entrypoint.sh
+RUN chmod +x /usr/local/bin/agent-entrypoint.sh \
+    && mkdir -p /home/coder && chown 1000:1000 /home/coder
+# Same user id as the Coder workspace, so files in the shared home keep one owner.
+USER 1000:1000
+ENV HOME=/home/coder
+WORKDIR /home/coder
+EXPOSE 3284
+ENTRYPOINT ["agent-entrypoint.sh"]

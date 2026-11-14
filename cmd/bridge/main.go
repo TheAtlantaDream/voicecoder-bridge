@@ -26,7 +26,7 @@ func main() {
 	agentAPIURL := flag.String("agentapi-url", "http://localhost:3284", "base URL of the AgentAPI server")
 	repo := flag.String("repo", "~/project", "project folder the agent works in")
 	agentTimeout := flag.Duration("agent-timeout", 180*time.Second, "longest one agent request may run")
-	allowedOrigins := flag.String("allowed-origins", "http://localhost,http://127.0.0.1,https://coder.c1.workshop.cdr.dev", "comma-separated web origins that may connect when an agent is set")
+	allowedOrigins := flag.String("allowed-origins", "http://localhost,http://127.0.0.1,https://coder.c1.workshop.cdr.dev", "comma-separated web origins that may connect when an agent is set; *.example.com matches subdomains; BRIDGE_ALLOWED_ORIGINS adds more")
 	flag.Parse()
 
 	log.Printf("voicecoder bridge: addr %s whisper=%s", *addr, *whisperURL)
@@ -53,6 +53,9 @@ func main() {
 	}
 	if *agentName != "none" {
 		origins := strings.Split(*allowedOrigins, ",")
+		if extra := strings.TrimSpace(os.Getenv("BRIDGE_ALLOWED_ORIGINS")); extra != "" {
+			origins = append(origins, strings.Split(extra, ",")...)
+		}
 		opts = append(opts, bridge.WithAllowedOrigins(origins))
 		log.Printf("allowed origins: %s", strings.Join(origins, ", "))
 	}
