@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 FROM python:3.12-slim-bookworm
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -8,7 +9,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 COPY requirements-whisper.txt .
-RUN pip install --no-cache-dir -r requirements-whisper.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r requirements-whisper.txt
 COPY whisper_server.py download_model.py ./
 
 ENV PARAKEET_MODEL=sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8 \

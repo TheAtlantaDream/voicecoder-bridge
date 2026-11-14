@@ -1,0 +1,7 @@
+.git
+.gitignore
+*.md
+test-client.html
+**/agent_test.go
+**/*_test.go
+.DS_Store
