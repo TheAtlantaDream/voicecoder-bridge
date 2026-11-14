@@ -14,6 +14,9 @@
   .transcript { color: #000; font-weight: bold; }
   .cleaned { color: #060; font-weight: bold; }
   .error { color: #c00; }
+  .status { color: #05a; }
+  .summary { font-family: system-ui, sans-serif; font-size: 1.3rem; font-weight: bold; margin: 0.5em 0; }
+  .diff { background: #f4f4f4; border: 1px solid #ddd; padding: 0.5em; margin: 0 0 0.5em; overflow-x: auto; white-space: pre; font-family: monospace; }
   input { width: 70%; padding: 0.5em; }
 </style>
 </head>
@@ -40,6 +43,15 @@ function log(msg, cls) {
   logEl.appendChild(div);
 }
 
+// Show an agent result: the summary in large text, then the diff.
+function showResult(m) {
+  log(m.text, 'summary');
+  const pre = document.createElement('pre');
+  pre.className = 'diff';
+  pre.textContent = m.diff || '(no changes waiting for approval)';
+  logEl.appendChild(pre);
+}
+
 function connect() {
   ws = new WebSocket('ws://localhost:8000/ws');
   ws.onopen = () => { statusEl.textContent = 'connected'; document.getElementById('start').disabled = false; log('connected', 'status'); };
@@ -50,7 +62,8 @@ function connect() {
     if (m.type === 'partial') log('partial #' + m.seq + ': ' + m.text, 'partial');
     else if (m.type === 'transcript') log('transcript: ' + m.text, 'transcript');
     else if (m.type === 'cleaned') log('cleaned: ' + m.text, 'cleaned');
-    else if (m.type === 'status') log('status: ' + m.text);
+    else if (m.type === 'status') log('status: ' + m.text, 'status');
+    else if (m.type === 'agent_result') showResult(m);
     else if (m.type === 'error') log('error: ' + m.text, 'error');
     else log(ev.data);
   };
