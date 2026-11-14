@@ -28,7 +28,18 @@ def model_dir() -> Path:
     return MODEL_ROOT / MODEL_NAME
 
 
+def ensure_model() -> None:
+    """Download Parakeet into the models volume if setup didn't already."""
+    marker = model_dir() / "encoder.int8.onnx"
+    if marker.is_file():
+        return
+    from download_model import main as download_main
+
+    download_main()
+
+
 def load_recognizer() -> sherpa_onnx.OfflineRecognizer:
+    ensure_model()
     d = model_dir()
     encoder = d / "encoder.int8.onnx"
     decoder = d / "decoder.int8.onnx"

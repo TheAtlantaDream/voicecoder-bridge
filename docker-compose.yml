@@ -3,6 +3,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.whisper
+    restart: unless-stopped
     environment:
       PARAKEET_MODEL: ${PARAKEET_MODEL:-sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8}
       PARAKEET_PROVIDER: ${PARAKEET_PROVIDER:-cpu}
@@ -12,11 +13,18 @@ services:
       - "${WHISPER_PUBLISH:-8080:8080}"
     volumes:
       - whisper-models:/models
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:8080/"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 180s
 
   # BRIDGE_AGENT=agentapi sends cleaned requests to the agent service. The
   # default, none, only transcribes.
   bridge:
     build: .
+    restart: unless-stopped
     command: >-
       --addr :8000 --whisper-url http://whisper:8080
       --agent ${BRIDGE_AGENT:-none} --agentapi-url http://agent:3284
@@ -28,13 +36,15 @@ services:
     volumes:
       - agent-home:/home/coder
     depends_on:
-      - whisper
+      whisper:
+        condition: service_healthy
 
   # Claude Code behind AgentAPI. It idles unless ANTHROPIC_API_KEY is set.
   agent:
     build:
       context: .
       dockerfile: Dockerfile.agent
+    restart: unless-stopped
     init: true
     environment:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
