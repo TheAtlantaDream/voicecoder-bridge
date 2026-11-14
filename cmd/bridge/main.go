@@ -19,7 +19,7 @@ import (
 
 func main() {
 	addr := flag.String("addr", ":8000", "listen address for the WebSocket server")
-	whisperURL := flag.String("whisper-url", "http://localhost:8080", "base URL of the local whisper.cpp server")
+	whisperURL := flag.String("whisper-url", "http://localhost:8080", "base URL of the local Whisper STT server")
 	silenceRMS := flag.Float64("silence-rms", 500, "16-bit RMS level below which counts as silence")
 	silenceSecs := flag.Float64("silence-secs", 1.5, "seconds of silence after speech that end an utterance")
 	agentName := flag.String("agent", "none", "coding agent to send cleaned requests to: none, fake, agentapi, or claude")

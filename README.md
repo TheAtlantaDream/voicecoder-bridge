@@ -3,7 +3,7 @@
 The bridge is the server between the VoiceCoder web app and the coding agent.
 
 - The web app sends microphone audio or typed text over a WebSocket.
-- The bridge turns audio into text with a local whisper.cpp server (small.en), then cleans the text (strips wake phrases like "hey VoiceCoder" / "hey Coder" / "Coder", filler words, and turns "auth dot py" into "auth.py").
+- The bridge turns audio into text with a local Faster-Whisper server (small.en, int8 CPU), then cleans the text (strips wake phrases like "hey VoiceCoder" / "hey Coder" / "Coder", filler words, and turns "auth dot py" into "auth.py").
 - With an agent configured, the bridge sends each cleaned request to the coding agent as a task and returns the agent's summary and the code changes.
 
 Without an agent it only transcribes and cleans.
@@ -22,12 +22,14 @@ The bridge listens on `:8000`:
 - `ws://localhost:8000/ws` is the WebSocket.
 - `http://localhost:8000/health` returns `ok`.
 
-For speech, the bridge needs a whisper.cpp server on `http://localhost:8080`. Docker Compose builds and starts both:
+For speech, the bridge needs a Faster-Whisper server on `http://localhost:8080` that speaks the same `/inference` API as whisper.cpp. Docker Compose builds and starts both:
 
 ```
-./model-download.sh      # once, downloads the small.en model
+./model-download.sh      # once, downloads the small.en CTranslate2 model
 docker compose up --build
 ```
+
+Override the model with `WHISPER_MODEL` (for example `base.en` or `distil-small.en`).
 
 The compose file starts the bridge with no agent.
 
@@ -38,7 +40,7 @@ Run the tests with `go test -race ./...`.
 | Flag | Default | Meaning |
 | --- | --- | --- |
 | `--addr` | `:8000` | Listen address. |
-| `--whisper-url` | `http://localhost:8080` | Base URL of the whisper.cpp server. |
+| `--whisper-url` | `http://localhost:8080` | Base URL of the local Whisper STT server. |
 | `--silence-rms` | `500` | 16-bit loudness below which audio counts as silence. |
 | `--silence-secs` | `1.5` | Seconds of silence after speech that end an utterance. |
 | `--agent` | `none` | Coding agent: `none`, `fake`, `agentapi`, or `claude`. |
@@ -108,7 +110,7 @@ Use `--agent=agentapi` normally. This is the fallback for when AgentAPI misbehav
 
 ## Running without Whisper
 
-Typed requests do not use Whisper. Start the bridge without a whisper.cpp server and send a `text` message:
+Typed requests do not use Whisper. Start the bridge without a Whisper server and send a `text` message:
 
 ```
 {"type":"text","text":"hey VoiceCoder add a function in auth dot py"}

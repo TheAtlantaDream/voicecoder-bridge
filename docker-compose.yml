@@ -3,7 +3,13 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.whisper
-    command: --host 0.0.0.0 -m /models/ggml-small.en.bin --port 8080 -t 8
+    environment:
+      WHISPER_MODEL: ${WHISPER_MODEL:-small.en}
+      WHISPER_DEVICE: cpu
+      WHISPER_COMPUTE_TYPE: int8
+      WHISPER_CPU_THREADS: ${WHISPER_CPU_THREADS:-8}
+      WHISPER_BEAM_SIZE: ${WHISPER_BEAM_SIZE:-1}
+      WHISPER_DOWNLOAD_ROOT: /models
     ports:
       - "${WHISPER_PUBLISH:-8080:8080}"
     volumes:
@@ -44,8 +50,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.whisper
-    entrypoint: /opt/whisper-models/download-ggml-model.sh
-    command: small.en /models
+    entrypoint: ["python3", "/app/download_model.py"]
+    environment:
+      WHISPER_MODEL: ${WHISPER_MODEL:-small.en}
+      WHISPER_DOWNLOAD_ROOT: /models
     volumes:
       - whisper-models:/models
 
