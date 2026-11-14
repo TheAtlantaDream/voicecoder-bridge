@@ -230,7 +230,7 @@ func agentRunning(sess *session) bool {
 }
 
 const (
-	stopWithChanges = "Stopped. Some files may have changed. Say reject to throw them away, or approve to keep them."
+	stopWithChanges = "Stopped. Some files may have changed."
 	busyStatus      = "Still working on your last request. Say stop to cancel it."
 )
 

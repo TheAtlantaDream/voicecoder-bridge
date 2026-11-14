@@ -147,7 +147,7 @@ A typed request with an agent set gives, in order: `cleaned`, `status` "Working 
 | `Working on it.` | A task was sent to the agent. |
 | `Still working, N seconds so far.` | Every 10 seconds while a task runs. |
 | `Still working on your last request. Say stop to cancel it.` | A new request arrived while a task was running. The new request is dropped. |
-| `Stopped. Some files may have changed. Say reject to throw them away, or approve to keep them.` | A running task was stopped. |
+| `Stopped. Some files may have changed.` | A running task was stopped. |
 | `Stopped. Nothing was kept.` | Stop arrived with no task running. |
 
 ### Error messages from the agent
@@ -164,12 +164,12 @@ A typed request with an agent set gives, in order: `cleaned`, `status` "Working 
 
 ## Stop
 
-The bridge handles stop itself. Every other request, including "approve", "reject", and "undo", goes to the agent as a normal task.
+The bridge handles stop itself. Every other request, including "approve", goes to the agent as a normal task.
 
 - A `stop` message cancels the current spoken request and any running task.
 - While a task is running, a spoken or typed request that is only "stop" or "cancel" does the same. Case, spaces, and trailing punctuation are ignored, so "Stop." and "stop!" count.
-- If a task was running, the bridge interrupts the agent and sends `status` "Stopped. Some files may have changed. Say reject to throw them away, or approve to keep them." An `error` "Stopped." follows when the task has ended.
-- A stopped task can leave half-finished edits in the project folder. The user says "reject" to discard them or "approve" to keep them.
+- If a task was running, the bridge interrupts the agent and sends `status` "Stopped. Some files may have changed." An `error` "Stopped." follows when the task has ended.
+- A stopped task can leave half-finished edits in the project folder. The user asks the agent in their own words to discard them, or says "approve" to keep them.
 - If no task was running, the bridge sends `status` "Stopped. Nothing was kept."
 - A new spoken request (`start`) does not cancel a running task.
 - One task runs at a time per connection.
@@ -195,20 +195,21 @@ The bridge logs the chosen agent and the allowed origins at startup.
 
 ## Workspace rules file
 
-Approve, reject, and undo only work if the agent knows what they mean. Those rules live in `~/.claude/CLAUDE.md`, Claude Code's user-level rules file. It applies to every project in the workspace, and a project's own `CLAUDE.md` still works alongside it.
+"Approve" only works if the agent knows what it means. That rule and the others live in `~/.claude/CLAUDE.md`, Claude Code's user-level rules file. It applies to every project in the workspace, and a project's own `CLAUDE.md` still works alongside it.
+
+There are no keywords for discarding or reversing changes. The user asks for that in their own words and the agent handles it like any other request.
 
 If the file already exists, add the rules under their heading instead of overwriting it.
 
 ```
 # VoiceCoder rules
 
-- Only edit files inside the project folder you were started in. Never run git push.
-- After any code change, run the project's tests if it has any.
-- Only commit when the user says "approve": run git add -A and git commit with a short message describing the change.
-- "Reject" means discard every uncommitted change, including new files: git checkout . and git clean -fd.
-- "Undo" means revert the last commit: git revert --no-edit HEAD.
-- Never commit unless the user said approve.
-- End every reply with a plain-language summary of at most three sentences: which files changed, what the change does, and the test result if tests ran. This summary is read aloud to the user.
+- Work only inside the project folder you were started in. Never run git push.
+- Never commit unless the user says "approve". On approve, commit all current changes with a short message describing them.
+- If a request is unclear, ask one short clarifying question and change nothing until the user answers.
+- You may install packages or download what a request needs. Say so in your summary when you do.
+- Use your judgment on whether to run the project's tests after a change, based on how the user has set up and is using them. Whenever you do run tests, say in your summary whether they passed.
+- End every reply with a summary of at most five sentences. Write it as plain text with no symbols or markdown, describing in everyday language what you did and what it means for the user. Do not make it overly technical.
 ```
 
 The last rule matters to the bridge: the agent's final reply is what `agent_result` returns as `text`.

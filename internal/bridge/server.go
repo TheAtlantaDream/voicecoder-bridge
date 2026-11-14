@@ -253,7 +253,7 @@ func (s *Server) handleControl(ctx context.Context, sess *session, send func(out
 		}
 		sess.mu.Unlock()
 		if s.cancelAgent(sess) {
-			send(outbound{Type: "status", Text: "Stopped. Some files may have changed. Say reject to throw them away, or approve to keep them."})
+			send(outbound{Type: "status", Text: "Stopped. Some files may have changed."})
 		} else {
 			send(outbound{Type: "status", Text: "Stopped. Nothing was kept."})
 		}
