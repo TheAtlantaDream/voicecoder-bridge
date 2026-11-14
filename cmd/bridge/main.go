@@ -22,7 +22,7 @@ func main() {
 	whisperURL := flag.String("whisper-url", "http://localhost:8080", "base URL of the local whisper.cpp server")
 	silenceRMS := flag.Float64("silence-rms", 500, "16-bit RMS level below which counts as silence")
 	silenceSecs := flag.Float64("silence-secs", 1.5, "seconds of silence after speech that end an utterance")
-	agentName := flag.String("agent", "none", "coding agent to send cleaned requests to: none, fake, or agentapi")
+	agentName := flag.String("agent", "none", "coding agent to send cleaned requests to: none, fake, agentapi, or claude")
 	agentAPIURL := flag.String("agentapi-url", "http://localhost:3284", "base URL of the AgentAPI server")
 	repo := flag.String("repo", "~/project", "project folder the agent works in")
 	agentTimeout := flag.Duration("agent-timeout", 180*time.Second, "longest one agent request may run")
@@ -44,8 +44,12 @@ func main() {
 		dir := expandHome(*repo)
 		opts = append(opts, bridge.WithAgent(agent.NewAgentAPI(*agentAPIURL, dir, *agentTimeout)))
 		log.Printf("agent: agentapi url=%s repo=%s timeout=%s", *agentAPIURL, dir, *agentTimeout)
+	case "claude":
+		dir := expandHome(*repo)
+		opts = append(opts, bridge.WithAgent(agent.NewClaude(dir, *agentTimeout)))
+		log.Printf("agent: claude (direct command, no AgentAPI) repo=%s timeout=%s", dir, *agentTimeout)
 	default:
-		log.Fatalf("unknown -agent %q, want none, fake, or agentapi", *agentName)
+		log.Fatalf("unknown -agent %q, want none, fake, agentapi, or claude", *agentName)
 	}
 	if *agentName != "none" {
 		origins := strings.Split(*allowedOrigins, ",")

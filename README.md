@@ -41,10 +41,10 @@ Run the tests with `go test -race ./...`.
 | `--whisper-url` | `http://localhost:8080` | Base URL of the whisper.cpp server. |
 | `--silence-rms` | `500` | 16-bit loudness below which audio counts as silence. |
 | `--silence-secs` | `1.5` | Seconds of silence after speech that end an utterance. |
-| `--agent` | `none` | Coding agent: `none`, `fake`, or `agentapi`. |
+| `--agent` | `none` | Coding agent: `none`, `fake`, `agentapi`, or `claude`. |
 | `--agentapi-url` | `http://localhost:3284` | Base URL of the AgentAPI server. Used with `--agent=agentapi`. |
-| `--repo` | `~/project` | Project folder the agent works in. The diff is read from here. Used with `--agent=agentapi`. |
-| `--agent-timeout` | `180s` | Longest one request may run. Used with `--agent=agentapi`. |
+| `--repo` | `~/project` | Project folder the agent works in. The diff is read from here. Used with `--agent=agentapi` and `--agent=claude`. |
+| `--agent-timeout` | `180s` | Longest one request may run. Used with `--agent=agentapi` and `--agent=claude`. |
 | `--allowed-origins` | `http://localhost,http://127.0.0.1,https://coder.c1.workshop.cdr.dev` | Comma-separated web origins that may connect when an agent is set. |
 
 ### Fake agent
@@ -71,6 +71,20 @@ agentapi server --type=claude -- claude
 - The project folder must be a git repository (`git init`), or the bridge cannot read the changes.
 - `ANTHROPIC_API_KEY` and `ANTHROPIC_MODEL` must be set in the workspace where AgentAPI runs. Never commit them.
 - The bridge and AgentAPI must run on the same machine, because the bridge reads the diff from the project folder on disk.
+
+### Claude directly (fallback)
+
+```
+./bridge --agent=claude --repo ~/project
+```
+
+Use `--agent=agentapi` normally. This is the fallback for when AgentAPI misbehaves: the bridge runs the `claude` command itself, once per request, and AgentAPI does not need to be running.
+
+- Each request runs `claude -p "<request>" --output-format json` inside `--repo`.
+- The `claude` command must be installed on the machine that runs the bridge, with `ANTHROPIC_API_KEY` set there.
+- Each request is a new Claude conversation. Claude does not remember earlier requests, but it sees the files and git state they left behind.
+- Stop and the timeout end the `claude` process.
+- The messages to the web app are the same as with AgentAPI.
 
 ## Running without Whisper
 
@@ -143,9 +157,10 @@ A typed request with an agent set gives, in order: `cleaned`, `status` "Working 
 | `Stopped.` | The task was cancelled. |
 | `That took too long, try a smaller request.` | The task ran longer than `--agent-timeout`. |
 | `The agent is still busy. Say stop or wait a moment.` | AgentAPI was already working on something else. |
-| `I can't reach the coding agent right now.` | AgentAPI did not answer. |
+| `I can't reach the coding agent right now.` | AgentAPI did not answer, or with `--agent=claude` the `claude` command could not be started. |
 | `The coding agent did not accept that request.` | AgentAPI refused the message. |
 | `The agent finished, but I could not read the changes in the project folder.` | `git diff` failed in `--repo`. |
+| `The coding agent ran into a problem and did not finish.` | With `--agent=claude`, the `claude` command failed. |
 
 ## Stop
 
