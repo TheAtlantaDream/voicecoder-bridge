@@ -71,12 +71,16 @@ func SnapshotTree(ctx context.Context, repo string) (string, error) {
 	if _, err := git(ctx, repo, "rev-parse", "--git-dir"); err != nil {
 		return "", err
 	}
+	// Path only: an empty file makes git fail with "index file smaller than
+	// expected", which is the common case for a fresh `git init` with no HEAD
+	// (read-tree would otherwise rewrite a corrupt index).
 	tmp, err := os.CreateTemp("", "voicecoder-index-*")
 	if err != nil {
 		return "", err
 	}
 	indexPath := tmp.Name()
 	_ = tmp.Close()
+	_ = os.Remove(indexPath)
 	defer os.Remove(indexPath)
 
 	env := []string{"GIT_INDEX_FILE=" + indexPath}

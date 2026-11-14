@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"regexp"
 	"strings"
@@ -92,6 +93,7 @@ func (a *AgentAPI) Run(ctx context.Context, prompt string, onUpdate UpdateFunc) 
 
 	baseline, err := SnapshotTree(runCtx, a.repo)
 	if err != nil {
+		log.Printf("agentapi: snapshot before run: %v", err)
 		return fail(errNoDiff)
 	}
 
@@ -174,6 +176,7 @@ func (a *AgentAPI) Run(ctx context.Context, prompt string, onUpdate UpdateFunc) 
 
 	diff, err := DiffSince(runCtx, a.repo, baseline)
 	if err != nil {
+		log.Printf("agentapi: diff since snapshot: %v", err)
 		return fail(errNoDiff)
 	}
 	return Result{Summary: summary, Diff: diff}, nil

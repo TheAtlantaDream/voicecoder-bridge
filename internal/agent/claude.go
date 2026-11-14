@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"os/exec"
 	"strings"
 	"time"
@@ -47,6 +48,7 @@ func (c *Claude) Run(ctx context.Context, prompt string, onUpdate UpdateFunc) (R
 
 	baseline, err := SnapshotTree(runCtx, c.repo)
 	if err != nil {
+		log.Printf("claude: snapshot before run: %v", err)
 		return fail(errNoDiff)
 	}
 
@@ -79,6 +81,7 @@ func (c *Claude) Run(ctx context.Context, prompt string, onUpdate UpdateFunc) (R
 
 	diff, err := DiffSince(runCtx, c.repo, baseline)
 	if err != nil {
+		log.Printf("claude: diff since snapshot: %v", err)
 		return fail(errNoDiff)
 	}
 	return Result{Summary: summary, Diff: diff}, nil

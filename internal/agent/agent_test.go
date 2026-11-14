@@ -210,3 +210,23 @@ func TestDiffSinceUnchanged(t *testing.T) {
 		t.Errorf("diff = %q, want empty when nothing changed", d)
 	}
 }
+
+// TestDiffSinceNoCommits is the VoiceCoder default: git init, no HEAD yet.
+// An empty temp index file used to make SnapshotTree fail here.
+func TestDiffSinceNoCommits(t *testing.T) {
+	dir := newRepo(t, false)
+	before, err := SnapshotTree(context.Background(), dir)
+	if err != nil {
+		t.Fatalf("SnapshotTree on empty repo: %v", err)
+	}
+	write(t, dir, "hello.txt", "hello\n")
+	d, err := DiffSince(context.Background(), dir, before)
+	if err != nil {
+		t.Fatalf("DiffSince: %v", err)
+	}
+	for _, want := range []string{"hello.txt", "+hello"} {
+		if !strings.Contains(d, want) {
+			t.Errorf("diff is missing %q:\n%s", want, d)
+		}
+	}
+}
