@@ -17,13 +17,15 @@ import (
 func main() {
 	addr := flag.String("addr", ":8000", "listen address for the WebSocket server")
 	whisperURL := flag.String("whisper-url", "http://localhost:8080", "base URL of the local whisper.cpp server")
+	silenceRMS := flag.Float64("silence-rms", 500, "16-bit RMS level below which counts as silence")
+	silenceSecs := flag.Float64("silence-secs", 1.5, "seconds of silence after speech that end an utterance")
 	flag.Parse()
 
 	log.Printf("voicecoder bridge: addr %s whisper=%s", *addr, *whisperURL)
 
 	transcriber := whisper.NewHTTPClient(*whisperURL, 60*time.Second)
 
-	srv := bridge.NewServer(transcriber)
+	srv := bridge.NewServer(transcriber, bridge.WithSilence(*silenceRMS, time.Duration(*silenceSecs*float64(time.Second))))
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", srv.HandleWS)

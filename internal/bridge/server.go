@@ -2,13 +2,16 @@ package bridge
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"log"
+	"math"
 	"net/http"
 	"regexp"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/theatlantadream/voicecoder-bridge/internal/clean"
@@ -22,15 +25,32 @@ var blankRe = regexp.MustCompile(`\[.*?\]`)
 type Server struct {
 	transcriber whisper.Transcriber
 	upgrader    websocket.Upgrader
+	silenceRMS  float64
+	silenceFor  time.Duration
 }
 
-func NewServer(t whisper.Transcriber) *Server {
-	return &Server{
+type Option func(*Server)
+
+func WithSilence(rms float64, d time.Duration) Option {
+	return func(s *Server) {
+		s.silenceRMS = rms
+		s.silenceFor = d
+	}
+}
+
+func NewServer(t whisper.Transcriber, opts ...Option) *Server {
+	s := &Server{
 		transcriber: t,
+		silenceRMS:  500,
+		silenceFor:  1500 * time.Millisecond,
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool { return true },
 		},
 	}
+	for _, o := range opts {
+		o(s)
+	}
+	return s
 }
 
 type control struct {
@@ -45,14 +65,16 @@ type outbound struct {
 }
 
 type session struct {
-	mu        sync.Mutex
-	listening bool
-	audio     []byte
-	partials  map[int]string
-	nextSeq   int
-	pending   sync.WaitGroup
-	runCtx    context.Context
-	cancel    context.CancelFunc
+	mu            sync.Mutex
+	listening     bool
+	audio         []byte
+	partials      map[int]string
+	nextSeq       int
+	pending       sync.WaitGroup
+	runCtx        context.Context
+	cancel        context.CancelFunc
+	speechStarted bool
+	lastSpeechAt  time.Time
 }
 
 func (s *Server) HandleWS(w http.ResponseWriter, r *http.Request) {
@@ -98,6 +120,11 @@ func (s *Server) handleAudio(ctx context.Context, sess *session, send func(outbo
 		sess.mu.Unlock()
 		return
 	}
+	now := time.Now()
+	if rmsOf(payload) >= s.silenceRMS {
+		sess.speechStarted = true
+		sess.lastSpeechAt = now
+	}
 	sess.audio = append(sess.audio, payload...)
 	for len(sess.audio) >= chunkBytes {
 		chunk := append([]byte(nil), sess.audio[:chunkBytes]...)
@@ -107,7 +134,11 @@ func (s *Server) handleAudio(ctx context.Context, sess *session, send func(outbo
 		sess.pending.Add(1)
 		go s.transcribeChunk(sess.runCtx, sess, send, seq, chunk)
 	}
+	due := sess.speechStarted && now.Sub(sess.lastSpeechAt) >= s.silenceFor
 	sess.mu.Unlock()
+	if due {
+		s.endUtterance(sess, send)
+	}
 }
 
 func (s *Server) transcribeChunk(ctx context.Context, sess *session, send func(outbound), seq int, chunk []byte) {
@@ -142,21 +173,13 @@ func (s *Server) handleControl(ctx context.Context, sess *session, send func(out
 		sess.audio = sess.audio[:0]
 		sess.partials = make(map[int]string)
 		sess.nextSeq = 0
-		sess.mu.Unlock()
-	case "end":
-		sess.mu.Lock()
-		sess.listening = false
-		if len(sess.audio) > 0 {
-			chunk := append([]byte(nil), sess.audio...)
-			sess.audio = sess.audio[:0]
-			seq := sess.nextSeq
-			sess.nextSeq++
-			sess.pending.Add(1)
-			go s.transcribeChunk(sess.runCtx, sess, send, seq, chunk)
-		}
+		sess.speechStarted = false
+		sess.lastSpeechAt = time.Time{}
 		runCtx := sess.runCtx
 		sess.mu.Unlock()
-		go s.finishUtterance(runCtx, sess, send)
+		go s.watchSilence(runCtx, sess, send)
+	case "end":
+		s.endUtterance(sess, send)
 	case "stop":
 		sess.mu.Lock()
 		sess.listening = false
@@ -205,4 +228,66 @@ func (s *Server) finishUtterance(ctx context.Context, sess *session, send func(o
 
 	cleaned := clean.Clean(joined)
 	send(outbound{Type: "cleaned", Text: cleaned})
+}
+
+func (s *Server) autoEndDue(sess *session, now time.Time) bool {
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	return sess.listening && sess.speechStarted && now.Sub(sess.lastSpeechAt) >= s.silenceFor
+}
+
+func (s *Server) watchSilence(ctx context.Context, sess *session, send func(outbound)) {
+	tick := time.NewTicker(200 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-tick.C:
+			sess.mu.Lock()
+			listening := sess.listening
+			sess.mu.Unlock()
+			if !listening {
+				return
+			}
+			if s.autoEndDue(sess, now) {
+				s.endUtterance(sess, send)
+				return
+			}
+		}
+	}
+}
+
+func (s *Server) endUtterance(sess *session, send func(outbound)) {
+	sess.mu.Lock()
+	if !sess.listening {
+		sess.mu.Unlock()
+		return
+	}
+	sess.listening = false
+	if len(sess.audio) > 0 {
+		chunk := append([]byte(nil), sess.audio...)
+		sess.audio = sess.audio[:0]
+		seq := sess.nextSeq
+		sess.nextSeq++
+		sess.pending.Add(1)
+		go s.transcribeChunk(sess.runCtx, sess, send, seq, chunk)
+	}
+	runCtx := sess.runCtx
+	sess.mu.Unlock()
+	go s.finishUtterance(runCtx, sess, send)
+}
+
+func rmsOf(pcm []byte) float64 {
+	n := len(pcm) / 2
+	if n == 0 {
+		return 0
+	}
+
+	var sum float64
+	for i := 0; i < n; i++ {
+		v := float64(int16(binary.LittleEndian.Uint16(pcm[2*i:])))
+		sum += v * v
+	}
+	return math.Sqrt(sum / float64(n))
 }
