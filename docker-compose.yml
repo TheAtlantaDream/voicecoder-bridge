@@ -1,5 +1,6 @@
 services:
   whisper:
+    image: voicecoder-whisper:latest
     build:
       context: .
       dockerfile: Dockerfile.whisper
@@ -24,6 +25,7 @@ services:
   # BRIDGE_AGENT=agentapi sends cleaned requests to the agent service. The
   # default, none, only transcribes.
   bridge:
+    image: voicecoder-bridge:latest
     build: .
     restart: unless-stopped
     command: >-
@@ -42,6 +44,7 @@ services:
 
   # Claude Code behind AgentAPI. It idles unless ANTHROPIC_API_KEY is set.
   agent:
+    image: voicecoder-agent:latest
     build:
       context: .
       dockerfile: Dockerfile.agent
@@ -56,6 +59,7 @@ services:
   model-download:
     profiles:
       - setup
+    image: voicecoder-whisper:latest
     build:
       context: .
       dockerfile: Dockerfile.whisper
@@ -67,7 +71,9 @@ services:
       - whisper-models:/models
 
 volumes:
+  # Shared across all Coder workspaces on the host so Parakeet is downloaded once.
   whisper-models:
+    name: voicecoder-whisper-models
   # The home folder the agent works in. In a Coder workspace this is the
   # workspace's own home volume, so the editor shows the same project.
   agent-home:
