@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"math"
 	"net/http"
@@ -32,6 +33,9 @@ type Server struct {
 	silenceFor  time.Duration
 	agent       agent.Agent
 	origins     []string
+	// progressEvery is how often a running agent reports that it is still
+	// working. Tests shorten it.
+	progressEvery time.Duration
 }
 
 type Option func(*Server)
@@ -64,6 +68,8 @@ func NewServer(t whisper.Transcriber, opts ...Option) *Server {
 		transcriber: t,
 		silenceRMS:  500,
 		silenceFor:  1500 * time.Millisecond,
+
+		progressEvery: 10 * time.Second,
 	}
 	s.upgrader = websocket.Upgrader{CheckOrigin: s.originAllowed}
 	for _, o := range opts {
@@ -342,7 +348,36 @@ func (s *Server) submit(ctx context.Context, sess *session, send func(outbound),
 
 	send(outbound{Type: "status", Text: "Working on it."})
 	go func() {
-		res, err := s.agent.Run(agentCtx, cleaned)
+		type outcome struct {
+			res agent.Result
+			err error
+		}
+		done := make(chan outcome, 1)
+		go func() {
+			res, err := s.agent.Run(agentCtx, cleaned)
+			done <- outcome{res, err}
+		}()
+
+		// Say so every progressEvery while the run goes on, so the user is
+		// not left in silence. Progress stops once the run is cancelled.
+		started := time.Now()
+		tick := time.NewTicker(s.progressEvery)
+		defer tick.Stop()
+		var out outcome
+	wait:
+		for {
+			select {
+			case out = <-done:
+				break wait
+			case <-agentCtx.Done():
+				out = <-done
+				break wait
+			case <-tick.C:
+				secs := int(time.Since(started).Round(time.Second).Seconds())
+				send(outbound{Type: "status", Text: fmt.Sprintf("Still working, %d seconds so far.", secs)})
+			}
+		}
+		res, err := out.res, out.err
 
 		sess.mu.Lock()
 		if sess.agentRun == run {

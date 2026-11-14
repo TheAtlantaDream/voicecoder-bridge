@@ -497,3 +497,67 @@ func TestWebSocketOriginAndClose(t *testing.T) {
 		t.Fatal("closing the socket did not cancel the running task")
 	}
 }
+
+// TestProgressWhileAgentWorks checks a slow run reports progress before
+// its result and never after it.
+func TestProgressWhileAgentWorks(t *testing.T) {
+	stub := newStubAgent()
+	srv := NewServer(&fakeTranscriber{}, WithAgent(stub))
+	srv.progressEvery = 10 * time.Millisecond
+	sess := &session{partials: make(map[int]string)}
+	c := &collector{}
+
+	isProgress := func(m outbound) bool {
+		return m.Type == "status" && strings.HasPrefix(m.Text, "Still working, ")
+	}
+	countProgress := func() int {
+		n := 0
+		for _, m := range c.all() {
+			if isProgress(m) {
+				n++
+			}
+		}
+		return n
+	}
+
+	srv.handleControl(context.Background(), sess, c.send, control{Type: "text", Text: "add a test"})
+	waitStarted(t, stub)
+	deadline := time.Now().Add(2 * time.Second)
+	for countProgress() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("no progress status while the agent was working, got %+v", c.all())
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	close(stub.release)
+	c.waitFor(t, "agent_result")
+
+	time.Sleep(10 * srv.progressEvery)
+	got := c.all()
+	if last := got[len(got)-1]; last.Type != "agent_result" {
+		t.Errorf("last message = %+v, want nothing after agent_result", last)
+	}
+	if first := got[2]; !isProgress(first) || !strings.HasSuffix(first.Text, " seconds so far.") {
+		t.Errorf("first progress = %+v, want \"Still working, N seconds so far.\"", first)
+	}
+}
+
+// TestProgressStopsOnStop checks no progress is sent once a run is stopped.
+func TestProgressStopsOnStop(t *testing.T) {
+	stub := newStubAgent()
+	srv := NewServer(&fakeTranscriber{}, WithAgent(stub))
+	srv.progressEvery = 10 * time.Millisecond
+	sess := &session{partials: make(map[int]string)}
+	c := &collector{}
+
+	srv.handleControl(context.Background(), sess, c.send, control{Type: "text", Text: "add a test"})
+	waitStarted(t, stub)
+	srv.handleControl(context.Background(), sess, c.send, control{Type: "stop"})
+	c.waitFor(t, "error")
+
+	n := len(c.all())
+	time.Sleep(10 * srv.progressEvery)
+	if got := c.all(); len(got) != n {
+		t.Errorf("messages after the run was stopped: %+v", got[n:])
+	}
+}
