@@ -3,7 +3,7 @@
 The bridge is the server between the VoiceCoder web app and the coding agent.
 
 - The web app sends microphone audio or typed text over a WebSocket.
-- The bridge turns audio into text with a local whisper.cpp server (large-v3-turbo), then cleans the text (strips wake phrases like "hey VoiceCoder" / "hey Coder" / "Coder", filler words, and turns "auth dot py" into "auth.py").
+- The bridge turns audio into text with a local whisper.cpp server (small.en), then cleans the text (strips wake phrases like "hey VoiceCoder" / "hey Coder" / "Coder", filler words, and turns "auth dot py" into "auth.py").
 - With an agent configured, the bridge sends each cleaned request to the coding agent as a task and returns the agent's summary and the code changes.
 
 Without an agent it only transcribes and cleans.
@@ -25,7 +25,7 @@ The bridge listens on `:8000`:
 For speech, the bridge needs a whisper.cpp server on `http://localhost:8080`. Docker Compose builds and starts both:
 
 ```
-./model-download.sh      # once, downloads the large-v3-turbo model
+./model-download.sh      # once, downloads the small.en model
 docker compose up --build
 ```
 
