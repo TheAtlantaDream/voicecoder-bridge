@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>VoiceCoder bridge test</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 640px; margin: 2em auto; padding: 0 1em; }
+  button { font-size: 1rem; padding: 0.5em 1em; margin-right: 0.5em; }
+  #start { background: #2a7; color: #fff; border: 0; }
+  #stop { background: #c33; color: #fff; border: 0; }
+  button:disabled { opacity: 0.4; }
+  #log { border: 1px solid #ccc; min-height: 200px; padding: 0.5em; margin-top: 1em; white-space: pre-wrap; font-family: monospace; }
+  .partial { color: #666; }
+  .transcript { color: #000; font-weight: bold; }
+  .cleaned { color: #060; font-weight: bold; }
+  .error { color: #c00; }
+  input { width: 70%; padding: 0.5em; }
+</style>
+</head>
+<body>
+<h1>VoiceCoder bridge test</h1>
+<p>Status: <span id="status">not connected</span></p>
+<button id="connect">Connect</button>
+<button id="start" disabled>Start talking</button>
+<button id="stop" disabled>End</button>
+<p>
+  <input id="typed" placeholder="or type a prompt, e.g. hey VoiceCoder fix the login bug in auth dot py">
+  <button id="sendText">Send as text</button>
+</p>
+<div id="log"></div>
+<script>
+const logEl = document.getElementById('log');
+const statusEl = document.getElementById('status');
+let ws = null, audioCtx = null, stream = null, processor = null, source = null;
+
+function log(msg, cls) {
+  const div = document.createElement('div');
+  if (cls) div.className = cls;
+  div.textContent = msg;
+  logEl.appendChild(div);
+}
+
+function connect() {
+  ws = new WebSocket('ws://localhost:8000/ws');
+  ws.onopen = () => { statusEl.textContent = 'connected'; document.getElementById('start').disabled = false; log('connected', 'status'); };
+  ws.onclose = () => { statusEl.textContent = 'disconnected'; document.getElementById('start').disabled = true; };
+  ws.onerror = () => log('websocket error: is the bridge running on :8000?', 'error');
+  ws.onmessage = (ev) => {
+    const m = JSON.parse(ev.data);
+    if (m.type === 'partial') log('partial #' + m.seq + ': ' + m.text, 'partial');
+    else if (m.type === 'transcript') log('transcript: ' + m.text, 'transcript');
+    else if (m.type === 'cleaned') log('cleaned: ' + m.text, 'cleaned');
+    else if (m.type === 'status') log('status: ' + m.text);
+    else if (m.type === 'error') log('error: ' + m.text, 'error');
+    else log(ev.data);
+  };
+}
+
+// Downsample mic audio to 16 kHz mono Int16 PCM and send as binary frames.
+function startMic() {
+  navigator.mediaDevices.getUserMedia({ audio: true }).then((s) => {
+    stream = s;
+    audioCtx = new AudioContext();
+    source = audioCtx.createMediaStreamSource(stream);
+    processor = audioCtx.createScriptProcessor(4096, 1, 1);
+    const ratio = audioCtx.sampleRate / 16000;
+    processor.onaudioprocess = (e) => {
+      const input = e.inputBuffer.getChannelData(0);
+      const out = new Int16Array(Math.floor(input.length / ratio));
+      for (let i = 0; i < out.length; i++) {
+        const v = input[Math.floor(i * ratio)];
+        out[i] = Math.max(-1, Math.min(1, v)) * 32767;
+      }
+      if (ws && ws.readyState === WebSocket.OPEN) ws.send(out.buffer);
+    };
+    source.connect(processor);
+    processor.connect(audioCtx.destination);
+    ws.send(JSON.stringify({ type: 'start' }));
+    document.getElementById('start').disabled = true;
+    document.getElementById('stop').disabled = false;
+    log('listening... speak, then press End');
+  }).catch((err) => log('mic error: ' + err.message, 'error'));
+}
+
+function stopMic() {
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'end' }));
+  if (processor) { processor.disconnect(); processor = null; }
+  if (source) { source.disconnect(); source = null; }
+  if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
+  if (audioCtx) { audioCtx.close(); audioCtx = null; }
+  document.getElementById('start').disabled = false;
+  document.getElementById('stop').disabled = true;
+  log('ended, waiting for transcript...');
+}
+
+document.getElementById('connect').onclick = connect;
+document.getElementById('start').onclick = startMic;
+document.getElementById('stop').onclick = stopMic;
+document.getElementById('sendText').onclick = () => {
+  const text = document.getElementById('typed').value;
+  if (ws && ws.readyState === WebSocket.OPEN && text) {
+    ws.send(JSON.stringify({ type: 'text', text }));
+  }
+};
+</script>
+</body>
+</html>
