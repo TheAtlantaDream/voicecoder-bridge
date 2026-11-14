@@ -3,7 +3,7 @@
 The bridge is the server between the VoiceCoder web app and the coding agent.
 
 - The web app sends microphone audio or typed text over a WebSocket.
-- The bridge turns audio into text with a local whisper.cpp server, then cleans the text (removes the "hey VoiceCoder" wake word and filler words, and turns "auth dot py" into "auth.py").
+- The bridge turns audio into text with a local whisper.cpp server (large-v3-turbo), then cleans the text (strips wake phrases like "hey VoiceCoder" / "hey Coder" / "Coder", filler words, and turns "auth dot py" into "auth.py").
 - With an agent configured, the bridge sends each cleaned request to the coding agent as a task and returns the agent's summary and the code changes.
 
 Without an agent it only transcribes and cleans.
@@ -25,7 +25,7 @@ The bridge listens on `:8000`:
 For speech, the bridge needs a whisper.cpp server on `http://localhost:8080`. Docker Compose builds and starts both:
 
 ```
-./model-download.sh      # once, downloads the small.en model
+./model-download.sh      # once, downloads the large-v3-turbo model
 docker compose up --build
 ```
 
@@ -155,7 +155,7 @@ Example result:
 
 A typed request with an agent set gives, in order: `cleaned`, `status` "Working on it.", zero or more `agent_partial` lines (or progress `status` if none yet), then `agent_result` or `error`.
 
-Spoken requests must start with "hey VoiceCoder" (or "VoiceCoder"). Without the wake word the bridge sends a status reminder and keeps listening. After each spoken utterance it re-arms automatically so the mic can stay open. Typed `text` does not need the wake word.
+Spoken requests must start with a wake phrase: "hey VoiceCoder", "VoiceCoder", "hey Coder", or "Coder". Without one the bridge sends a status reminder and keeps listening. After each spoken utterance it re-arms automatically so the mic can stay open. Typed `text` does not need a wake phrase.
 
 ### The `diff` field
 
@@ -169,7 +169,7 @@ Spoken requests must start with "hey VoiceCoder" (or "VoiceCoder"). Without the 
 | Text | When |
 | --- | --- |
 | `Listening for hey VoiceCoder…` | The bridge is armed and accepting audio. |
-| `Say hey VoiceCoder, then your request.` | Speech ended without the wake word. |
+| `Say hey VoiceCoder, hey Coder, or Coder, then your request.` | Speech ended without a wake phrase. |
 | `Working on it.` | A task was sent to the agent. |
 | `Still working, N seconds so far.` | Every 10 seconds while a task runs and no `agent_partial` has arrived yet. |
 | `Still working on your last request. Say stop to cancel it.` | A new request arrived while a task was running. The new request is dropped. |

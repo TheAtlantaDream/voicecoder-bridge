@@ -273,7 +273,7 @@ func TestSpokenWithoutWakeWord(t *testing.T) {
 	c := &collector{}
 
 	srv.finishUtterance(context.Background(), sess, c.send)
-	if !c.has("status", "Say hey VoiceCoder, then your request.") {
+	if !c.has("status", "Say hey VoiceCoder, hey Coder, or Coder, then your request.") {
 		t.Errorf("messages = %+v, want the wake-word reminder", c.all())
 	}
 	select {

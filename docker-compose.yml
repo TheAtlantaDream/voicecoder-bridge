@@ -3,7 +3,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.whisper
-    command: --host 0.0.0.0 -m /models/ggml-small.en.bin --port 8080 -t 8
+    command: --host 0.0.0.0 -m /models/ggml-large-v3-turbo.bin --port 8080 -t 8
     ports:
       - "${WHISPER_PUBLISH:-8080:8080}"
     volumes:
@@ -45,7 +45,7 @@ services:
       context: .
       dockerfile: Dockerfile.whisper
     entrypoint: /opt/whisper-models/download-ggml-model.sh
-    command: small.en /models
+    command: large-v3-turbo /models
     volumes:
       - whisper-models:/models
 

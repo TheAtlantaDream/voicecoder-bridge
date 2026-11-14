@@ -22,7 +22,9 @@ import (
 	"github.com/theatlantadream/voicecoder-bridge/internal/whisper"
 )
 
-const chunkBytes = 64000
+// chunkBytes is one second of 16 kHz mono Int16 PCM. Smaller chunks make
+// partial transcripts arrive sooner; large-v3-turbo keeps up with that rate.
+const chunkBytes = 32000
 
 var blankRe = regexp.MustCompile(`\[.*?\]`)
 
@@ -349,7 +351,7 @@ func (s *Server) finishUtterance(ctx context.Context, sess *session, send func(o
 		return
 	}
 	if !clean.HasWakeWord(joined) {
-		send(outbound{Type: "status", Text: "Say hey VoiceCoder, then your request."})
+		send(outbound{Type: "status", Text: "Say hey VoiceCoder, hey Coder, or Coder, then your request."})
 		rearm()
 		return
 	}
