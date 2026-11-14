@@ -5,7 +5,7 @@ services:
       dockerfile: Dockerfile.whisper
     command: --host 0.0.0.0 -m /models/ggml-small.en.bin --port 8080 -t 8
     ports:
-      - "8080:8080"
+      - "${WHISPER_PUBLISH:-8080:8080}"
     volumes:
       - whisper-models:/models
 
@@ -13,7 +13,7 @@ services:
     build: .
     command: --addr :8000 --whisper-url http://whisper:8080
     ports:
-      - "8000:8000"
+      - "${BRIDGE_PUBLISH:-8000:8000}"
     depends_on:
       - whisper
 
