@@ -34,21 +34,23 @@ def model_dir() -> Path:
     return MODEL_ROOT / MODEL_NAME
 
 
-def ensure_model() -> None:
-    """Download Parakeet into the models volume if setup didn't already."""
-    marker = model_dir() / "encoder.int8.onnx"
-    if marker.is_file():
-        return
+def ensure_model(*, force: bool = False) -> None:
+    """Download Parakeet if missing or corrupt (truncated downloads break ONNX)."""
     from download_model import main as download_main
+    from download_model import validate_model
 
-    log.info("model missing; downloading %s", MODEL_NAME)
-    download_main()
+    dest = model_dir()
+    err = None if dest.is_dir() else "missing model dir"
+    if err is None:
+        err = validate_model(dest)
+    if force or err is not None:
+        log.info("model needs download (%s); fetching %s", err or "forced", MODEL_NAME)
+        download_main(force=True)
 
 
-def load_recognizer():
+def _open_recognizer():
     import sherpa_onnx
 
-    ensure_model()
     d = model_dir()
     encoder = d / "encoder.int8.onnx"
     decoder = d / "decoder.int8.onnx"
@@ -69,6 +71,19 @@ def load_recognizer():
         model_type="nemo_transducer",
         decoding_method="greedy_search",
     )
+
+
+def load_recognizer():
+    ensure_model()
+    try:
+        return _open_recognizer()
+    except Exception as exc:  # noqa: BLE001
+        msg = str(exc).lower()
+        if "protobuf" in msg or "parse" in msg or "load model" in msg:
+            log.warning("onnx load failed (%s); re-downloading model once", exc)
+            ensure_model(force=True)
+            return _open_recognizer()
+        raise
 
 
 def load_in_background() -> None:
