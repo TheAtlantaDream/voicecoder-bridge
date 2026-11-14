@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log"
 	"math"
 	"net/http"
+	"net/url"
 	"regexp"
 	"sort"
 	"strings"
@@ -14,6 +17,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/theatlantadream/voicecoder-bridge/internal/agent"
 	"github.com/theatlantadream/voicecoder-bridge/internal/clean"
 	"github.com/theatlantadream/voicecoder-bridge/internal/whisper"
 )
@@ -27,6 +31,11 @@ type Server struct {
 	upgrader    websocket.Upgrader
 	silenceRMS  float64
 	silenceFor  time.Duration
+	agent       agent.Agent
+	origins     []string
+	// progressEvery is how often a running agent reports that it is still
+	// working. Tests shorten it.
+	progressEvery time.Duration
 }
 
 type Option func(*Server)
@@ -38,19 +47,66 @@ func WithSilence(rms float64, d time.Duration) Option {
 	}
 }
 
+// WithAgent sends every cleaned request to a. Without it the bridge only
+// transcribes and cleans.
+func WithAgent(a agent.Agent) Option {
+	return func(s *Server) {
+		s.agent = a
+	}
+}
+
+// WithAllowedOrigins limits which web pages may connect once an agent is
+// set. Each entry is a scheme and host, such as "https://example.com".
+func WithAllowedOrigins(origins []string) Option {
+	return func(s *Server) {
+		s.origins = origins
+	}
+}
+
 func NewServer(t whisper.Transcriber, opts ...Option) *Server {
 	s := &Server{
 		transcriber: t,
 		silenceRMS:  500,
 		silenceFor:  1500 * time.Millisecond,
-		upgrader: websocket.Upgrader{
-			CheckOrigin: func(r *http.Request) bool { return true },
-		},
+
+		progressEvery: 10 * time.Second,
 	}
+	s.upgrader = websocket.Upgrader{CheckOrigin: s.originAllowed}
 	for _, o := range opts {
 		o(s)
 	}
 	return s
+}
+
+// originAllowed lets every page in when no agent is set, as before. With an
+// agent, text becomes a coding task, so only allowed pages and tools that
+// send no Origin header may connect. localhost matches on any port.
+func (s *Server) originAllowed(r *http.Request) bool {
+	if s.agent == nil {
+		return true
+	}
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true
+	}
+	got, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	for _, allowed := range s.origins {
+		want, err := url.Parse(strings.TrimSpace(allowed))
+		if err != nil || want.Host == "" {
+			continue
+		}
+		if !strings.EqualFold(got.Scheme, want.Scheme) || !strings.EqualFold(got.Hostname(), want.Hostname()) {
+			continue
+		}
+		host := strings.ToLower(want.Hostname())
+		if host == "localhost" || host == "127.0.0.1" || got.Port() == want.Port() {
+			return true
+		}
+	}
+	return false
 }
 
 type control struct {
@@ -62,6 +118,7 @@ type outbound struct {
 	Type string `json:"type"`
 	Seq  int    `json:"seq"`
 	Text string `json:"text,omitempty"`
+	Diff string `json:"diff,omitempty"`
 }
 
 type session struct {
@@ -75,6 +132,11 @@ type session struct {
 	cancel        context.CancelFunc
 	speechStarted bool
 	lastSpeechAt  time.Time
+
+	// The agent run has its own context so a new utterance never cancels it.
+	baseCtx     context.Context
+	agentCancel context.CancelFunc
+	agentRun    int
 }
 
 func (s *Server) HandleWS(w http.ResponseWriter, r *http.Request) {
@@ -86,7 +148,8 @@ func (s *Server) HandleWS(w http.ResponseWriter, r *http.Request) {
 
 	defer conn.Close()
 
-	sess := &session{partials: make(map[int]string)}
+	sess := &session{partials: make(map[int]string), baseCtx: r.Context()}
+	defer s.cancelAgent(sess)
 	writeMu := &sync.Mutex{}
 	send := func(msg outbound) {
 		writeMu.Lock()
@@ -189,7 +252,11 @@ func (s *Server) handleControl(ctx context.Context, sess *session, send func(out
 			sess.cancel()
 		}
 		sess.mu.Unlock()
-		send(outbound{Type: "status", Text: "Stopped. Nothing was kept."})
+		if s.cancelAgent(sess) {
+			send(outbound{Type: "status", Text: "Stopped. Some files may have changed. Say reject to throw them away, or approve to keep them."})
+		} else {
+			send(outbound{Type: "status", Text: "Stopped. Nothing was kept."})
+		}
 
 	case "text":
 		if clean.HasWakeWord(c.Text) {
@@ -197,6 +264,7 @@ func (s *Server) handleControl(ctx context.Context, sess *session, send func(out
 		}
 		cleaned := clean.Clean(c.Text)
 		send(outbound{Type: "cleaned", Text: cleaned})
+		s.submit(ctx, sess, send, cleaned)
 	default:
 		send(outbound{Type: "error", Text: "unknown message type " + c.Type})
 	}
@@ -228,6 +296,106 @@ func (s *Server) finishUtterance(ctx context.Context, sess *session, send func(o
 
 	cleaned := clean.Clean(joined)
 	send(outbound{Type: "cleaned", Text: cleaned})
+	s.submit(ctx, sess, send, cleaned)
+}
+
+// cancelAgent stops the session's agent run and reports whether one was
+// in progress.
+func (s *Server) cancelAgent(sess *session) bool {
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	if sess.agentCancel == nil {
+		return false
+	}
+	sess.agentCancel()
+	sess.agentCancel = nil
+	return true
+}
+
+// isStopWord reports whether text is just "stop" or "cancel", ignoring
+// case, spaces, and trailing punctuation.
+func isStopWord(text string) bool {
+	word := strings.ToLower(strings.TrimRight(strings.TrimSpace(text), " .,;:!?"))
+	return word == "stop" || word == "cancel"
+}
+
+// submit sends a cleaned request to the agent, one run per session at a
+// time. It does nothing when no agent is set.
+func (s *Server) submit(ctx context.Context, sess *session, send func(outbound), cleaned string) {
+	if s.agent == nil || strings.TrimSpace(cleaned) == "" {
+		return
+	}
+
+	sess.mu.Lock()
+	if sess.agentCancel != nil {
+		sess.mu.Unlock()
+		if isStopWord(cleaned) {
+			s.handleControl(ctx, sess, send, control{Type: "stop"})
+			return
+		}
+		send(outbound{Type: "status", Text: "Still working on your last request. Say stop to cancel it."})
+		return
+	}
+	base := sess.baseCtx
+	if base == nil {
+		base = context.Background()
+	}
+	agentCtx, cancel := context.WithCancel(base)
+	sess.agentCancel = cancel
+	sess.agentRun++
+	run := sess.agentRun
+	sess.mu.Unlock()
+
+	send(outbound{Type: "status", Text: "Working on it."})
+	go func() {
+		type outcome struct {
+			res agent.Result
+			err error
+		}
+		done := make(chan outcome, 1)
+		go func() {
+			res, err := s.agent.Run(agentCtx, cleaned)
+			done <- outcome{res, err}
+		}()
+
+		// Say so every progressEvery while the run goes on, so the user is
+		// not left in silence. Progress stops once the run is cancelled.
+		started := time.Now()
+		tick := time.NewTicker(s.progressEvery)
+		defer tick.Stop()
+		var out outcome
+	wait:
+		for {
+			select {
+			case out = <-done:
+				break wait
+			case <-agentCtx.Done():
+				out = <-done
+				break wait
+			case <-tick.C:
+				secs := int(time.Since(started).Round(time.Second).Seconds())
+				send(outbound{Type: "status", Text: fmt.Sprintf("Still working, %d seconds so far.", secs)})
+			}
+		}
+		res, err := out.res, out.err
+
+		sess.mu.Lock()
+		if sess.agentRun == run {
+			sess.agentCancel = nil
+		}
+		sess.mu.Unlock()
+		cancel()
+
+		if errors.Is(err, context.Canceled) {
+			send(outbound{Type: "error", Text: "Stopped."})
+			return
+		}
+		if err != nil {
+			send(outbound{Type: "error", Text: err.Error()})
+			return
+		}
+		send(outbound{Type: "agent_result", Text: res.Summary, Diff: res.Diff})
+	}()
 }
 
 func (s *Server) autoEndDue(sess *session, now time.Time) bool {
