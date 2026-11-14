@@ -45,7 +45,10 @@ func NewAgentAPI(baseURL, repo string, timeout time.Duration) *AgentAPI {
 		repo:    repo,
 		timeout: timeout,
 		poll:    500 * time.Millisecond,
-		client:  &http.Client{Timeout: 10 * time.Second},
+		// No client Timeout: POST /message blocks until the agent starts
+		// processing (AgentAPI may wait >10s for the PTY to stabilize).
+		// Request contexts carry the real deadline (run timeout / interrupt).
+		client: &http.Client{},
 	}
 }
 
