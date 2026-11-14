@@ -36,13 +36,15 @@ def model_dir() -> Path:
 
 def ensure_model(*, force: bool = False) -> None:
     """Download Parakeet if missing or corrupt (truncated downloads break ONNX)."""
+    from download_model import describe_model
     from download_model import main as download_main
     from download_model import validate_model
 
     dest = model_dir()
+    log.info("model files: %s", describe_model(dest))
     err = None if dest.is_dir() else "missing model dir"
     if err is None:
-        err = validate_model(dest)
+        err = validate_model(dest, check_hash=True)
     if force or err is not None:
         log.info("model needs download (%s); fetching %s", err or "forced", MODEL_NAME)
         download_main(force=True)
@@ -61,6 +63,7 @@ def _open_recognizer():
             raise FileNotFoundError(
                 f"missing {p}; run model-download (./model-download.sh) first"
             )
+        log.info("using %s (%d bytes)", p.name, p.stat().st_size)
     return sherpa_onnx.OfflineRecognizer.from_transducer(
         encoder=str(encoder),
         decoder=str(decoder),
@@ -80,24 +83,29 @@ def load_recognizer():
     except Exception as exc:  # noqa: BLE001
         msg = str(exc).lower()
         if "protobuf" in msg or "parse" in msg or "load model" in msg:
-            log.warning("onnx load failed (%s); re-downloading model once", exc)
+            log.warning("onnx load failed (%s); wiping and re-downloading once", exc)
             ensure_model(force=True)
             return _open_recognizer()
         raise
 
 
+_load_lock = threading.Lock()
+
+
 def load_in_background() -> None:
     global recognizer, load_error
-    try:
-        log.info("loading %s (%s threads)", MODEL_NAME, CPU_THREADS)
-        recognizer = load_recognizer()
-        load_error = None
-        log.info("model ready")
-    except Exception as exc:  # noqa: BLE001 — surface any load failure in /ready
-        load_error = f"{type(exc).__name__}: {exc}"
-        log.exception("model load failed: %s", load_error)
-    finally:
-        ready.set()
+    with _load_lock:
+        try:
+            log.info("loading %s (%s threads)", MODEL_NAME, CPU_THREADS)
+            recognizer = load_recognizer()
+            load_error = None
+            log.info("model ready")
+        except Exception as exc:  # noqa: BLE001 — surface any load failure in /ready
+            recognizer = None
+            load_error = f"{type(exc).__name__}: {exc}"
+            log.exception("model load failed: %s", load_error)
+        finally:
+            ready.set()
 
 
 def to_mono_float32(path: str) -> tuple[np.ndarray, int]:
@@ -147,6 +155,30 @@ def root():
         "model": MODEL_NAME,
         "provider": PROVIDER,
     }
+
+
+@app.post("/repair")
+def repair():
+    """Wipe/re-download the model and reload. For corrupt shared volumes."""
+    global recognizer, load_error
+    ready.clear()
+    with _load_lock:
+        recognizer = None
+        load_error = None
+        try:
+            ensure_model(force=True)
+            recognizer = _open_recognizer()
+            load_error = None
+            return {"status": "ok", "model": MODEL_NAME}
+        except Exception as exc:  # noqa: BLE001
+            load_error = f"{type(exc).__name__}: {exc}"
+            log.exception("repair failed: %s", load_error)
+            return JSONResponse(
+                {"status": "error", "error": load_error},
+                status_code=500,
+            )
+        finally:
+            ready.set()
 
 
 @app.post("/inference")
