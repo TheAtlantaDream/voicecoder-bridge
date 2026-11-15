@@ -39,7 +39,10 @@ type AgentAPI struct {
 	repo    string
 	timeout time.Duration
 	poll    time.Duration
-	client  *http.Client
+	// settle is how long Run waits for a just-stopped agent to go idle
+	// before giving up with the busy error.
+	settle time.Duration
+	client *http.Client
 }
 
 func NewAgentAPI(baseURL, repo string, timeout time.Duration) *AgentAPI {
@@ -48,6 +51,7 @@ func NewAgentAPI(baseURL, repo string, timeout time.Duration) *AgentAPI {
 		repo:    repo,
 		timeout: timeout,
 		poll:    500 * time.Millisecond,
+		settle:  8 * time.Second,
 		// No client Timeout: POST /message blocks until the agent starts
 		// processing (AgentAPI may wait >10s for the PTY to stabilize).
 		// Request contexts carry the real deadline (run timeout / interrupt).
@@ -81,6 +85,17 @@ func (a *AgentAPI) Run(ctx context.Context, prompt string, onUpdate UpdateFunc) 
 	status, err := a.status(runCtx)
 	if err != nil {
 		return fail(errUnreachable)
+	}
+	// A run that was just stopped takes a moment to settle.
+	for deadline := time.Now().Add(a.settle); status != "stable" && time.Now().Before(deadline); {
+		select {
+		case <-runCtx.Done():
+			return fail(runCtx.Err())
+		case <-time.After(a.poll):
+		}
+		if status, err = a.status(runCtx); err != nil {
+			return fail(errUnreachable)
+		}
 	}
 	if status != "stable" {
 		return fail(errBusy)

@@ -7,6 +7,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -418,7 +420,7 @@ func TestStopWithoutRunKeepsOldWording(t *testing.T) {
 // so the UI is not flooded with partials; transcription still runs so "stop" works.
 func TestNoPartialsWhileAgentBusy(t *testing.T) {
 	stub := newStubAgent()
-	srv := NewServer(&fakeTranscriber{lines: []string{"hey Coder do something else"}}, WithAgent(stub))
+	srv := NewServer(&fakeTranscriber{lines: []string{"Coder do something else"}}, WithAgent(stub))
 	sess := &session{partials: make(map[int]string), armed: true, baseCtx: context.Background()}
 	c := &collector{}
 
@@ -447,13 +449,13 @@ func TestNoPartialsWhileAgentBusy(t *testing.T) {
 	sess.mu.Lock()
 	stored := sess.partials[0]
 	sess.mu.Unlock()
-	if stored != "hey Coder do something else" {
+	if stored != "Coder do something else" {
 		t.Errorf("partials[0] = %q, want transcript kept for stop/finish", stored)
 	}
 
 	// Non-stop speech while busy must not produce transcript/cleaned either.
 	sess.mu.Lock()
-	sess.partials = map[int]string{0: "hey Coder do another thing"}
+	sess.partials = map[int]string{0: "Coder do another thing"}
 	sess.mu.Unlock()
 	before := len(c.all())
 	srv.finishUtterance(context.Background(), sess, c.send)
@@ -772,4 +774,213 @@ func TestStoppedRunIsNotSpoken(t *testing.T) {
 	if len(speaker.texts) != 0 {
 		t.Errorf("spoken = %q, want nothing for a stopped run", speaker.texts)
 	}
+}
+
+func introCount(sp *stubSpeaker) int {
+	sp.mu.Lock()
+	defer sp.mu.Unlock()
+	n := 0
+	for _, text := range sp.texts {
+		if text == "welcome" {
+			n++
+		}
+	}
+	return n
+}
+
+// TestIntroSpokenOnce plays the welcome after the first request only, and
+// remembers it in the marker file across bridge restarts.
+func TestIntroSpokenOnce(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "state", "intro-played")
+	sp := &stubSpeaker{audio: []byte("mp3")}
+	run := func() {
+		srv := NewServer(&fakeTranscriber{}, WithAgent(agent.Fake{}), WithSpeaker(sp), WithIntro("welcome", marker))
+		sess := &session{partials: make(map[int]string)}
+		for i := 0; i < 2; i++ {
+			c := &collector{}
+			srv.handleControl(context.Background(), sess, c.send, control{Type: "text", Text: "add a function"})
+			c.waitFor(t, "agent_result")
+			c.waitFor(t, "speech")
+		}
+	}
+	run()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(marker); err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("marker file not written: %v", err)
+	}
+	if got := introCount(sp); got != 1 {
+		t.Fatalf("intro spoken %d times in the first bridge, want 1", got)
+	}
+	run()
+	if got := introCount(sp); got != 1 {
+		t.Fatalf("intro spoken %d times after a restart, want 1", got)
+	}
+}
+
+// TestIntroRetriedAfterFailure does not mark the intro played when the
+// audio could not be made.
+func TestIntroRetriedAfterFailure(t *testing.T) {
+	sp := &stubSpeaker{err: errors.New("elevenlabs down")}
+	srv := NewServer(&fakeTranscriber{}, WithAgent(agent.Fake{}), WithSpeaker(sp), WithIntro("welcome", ""))
+	sess := &session{partials: make(map[int]string)}
+	c := &collector{}
+	srv.handleControl(context.Background(), sess, c.send, control{Type: "text", Text: "add a function"})
+	c.waitFor(t, "agent_result")
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		srv.introMu.Lock()
+		done := srv.introDone
+		srv.introMu.Unlock()
+		if introCount(sp) > 0 && !done {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("intro stayed marked as played after a failed attempt")
+}
+
+type replyAgent struct{ reply string }
+
+func (a replyAgent) Run(ctx context.Context, prompt string, onUpdate agent.UpdateFunc) (agent.Result, error) {
+	return agent.Result{Summary: a.reply}, nil
+}
+
+// TestOnlySummaryIsSpoken reads aloud the Summary section, not the code,
+// while the on-screen result keeps the whole reply.
+func TestOnlySummaryIsSpoken(t *testing.T) {
+	sp := &stubSpeaker{audio: []byte("mp3")}
+	srv := NewServer(&fakeTranscriber{}, WithAgent(replyAgent{"Here:\n```go\nfunc a() {}\n```\nSummary: I added a function."}), WithSpeaker(sp))
+	sess := &session{partials: make(map[int]string)}
+	c := &collector{}
+	srv.handleControl(context.Background(), sess, c.send, control{Type: "text", Text: "add a function"})
+	if res := c.waitFor(t, "agent_result"); !strings.Contains(res.Text, "func a()") {
+		t.Fatalf("on-screen result lost the code: %q", res.Text)
+	}
+	if got := c.waitFor(t, "speech"); got.Text != "I added a function." {
+		t.Fatalf("spoken %q, want only the summary", got.Text)
+	}
+}
+
+// hear feeds one transcribed chunk into the session, as live audio would.
+func hear(srv *Server, sess *session, c *collector, seq int) {
+	sess.pending.Add(1)
+	srv.transcribeChunk(context.Background(), sess, c.send, seq, []byte{0, 0})
+}
+
+// TestHeyCoderCutsInOnRun stops the running agent as soon as "hey Coder" is
+// heard, then sends the rest of that utterance as the next request.
+func TestHeyCoderCutsInOnRun(t *testing.T) {
+	stub := newStubAgent()
+	tr := &fakeTranscriber{lines: []string{"some chatter", "Hey, Coder", "add a test instead over"}}
+	srv := NewServer(tr, WithAgent(stub), WithEndWord("over"))
+	sess := &session{partials: make(map[int]string)}
+	c := &collector{}
+
+	srv.handleControl(context.Background(), sess, c.send, control{Type: "text", Text: "add a function"})
+	waitStarted(t, stub)
+
+	hear(srv, sess, c, 0)
+	if c.has("partial", "some chatter") || len(stub.stopped) != 0 {
+		t.Fatalf("chatter without hey Coder reached the client or stopped the run: %+v", c.all())
+	}
+	hear(srv, sess, c, 1)
+	c.waitFor(t, "interrupt")
+	select {
+	case <-stub.stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("run was not stopped by hey Coder")
+	}
+	c.waitFor(t, "error") // the old run reports it stopped
+	sess.mu.Lock()
+	kept := len(sess.partials)
+	sess.mu.Unlock()
+	if kept != 2 {
+		t.Fatalf("partials kept = %d, want the cut-in utterance left intact", kept)
+	}
+
+	sess.pending.Add(1)
+	srv.transcribeChunk(context.Background(), sess, c.send, 2, []byte{0, 0})
+	srv.finishUtterance(context.Background(), sess, c.send)
+	select {
+	case prompt := <-stub.started:
+		if prompt != "add a test instead" {
+			t.Errorf("new request = %q, want %q", prompt, "add a test instead")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("no new run after the cut-in: %+v", c.all())
+	}
+	close(stub.release)
+	c.waitFor(t, "agent_result")
+}
+
+// TestBareCoderDoesNotCutIn needs "hey" to interrupt work in progress.
+func TestBareCoderDoesNotCutIn(t *testing.T) {
+	stub := newStubAgent()
+	srv := NewServer(&fakeTranscriber{lines: []string{"the coder is busy"}}, WithAgent(stub))
+	sess := &session{partials: make(map[int]string)}
+	c := &collector{}
+	srv.handleControl(context.Background(), sess, c.send, control{Type: "text", Text: "add a function"})
+	waitStarted(t, stub)
+	hear(srv, sess, c, 0)
+	srv.finishUtterance(context.Background(), sess, c.send)
+	if c.has("interrupt", "") || len(stub.stopped) != 0 || !agentRunning(sess) {
+		t.Errorf("run was interrupted without hey: %+v", c.all())
+	}
+	close(stub.release)
+}
+
+// TestCutInOnSpokenSummary covers speech heard while the client is talking:
+// chatter is ignored, "stop" ends the talking, "hey Coder" starts a request.
+func TestCutInOnSpokenSummary(t *testing.T) {
+	stub := newStubAgent()
+	tr := &fakeTranscriber{lines: []string{"I added the function", "Stop.", "hey VoiceCoder rename it"}}
+	srv := NewServer(tr, WithAgent(stub))
+	sess := &session{partials: make(map[int]string)}
+	c := &collector{}
+	next := func() {
+		sess.mu.Lock()
+		sess.partials = make(map[int]string)
+		sess.bargeIn = false
+		sess.mu.Unlock()
+		hear(srv, sess, c, 0)
+		srv.finishUtterance(context.Background(), sess, c.send)
+	}
+
+	srv.handleControl(context.Background(), sess, c.send, control{Type: "speech_start"})
+	next() // the app's own voice leaking into the mic
+	if got := c.all(); len(got) != 0 {
+		t.Fatalf("echo of the summary produced messages: %+v", got)
+	}
+	next() // "Stop."
+	if !c.has("interrupt", "") || len(stub.started) != 0 {
+		t.Fatalf("stop during speech: %+v, want interrupt and no agent run", c.all())
+	}
+
+	srv.handleControl(context.Background(), sess, c.send, control{Type: "speech_start"})
+	before := len(c.all())
+	next() // "hey VoiceCoder rename it"
+	interrupts := 0
+	for _, m := range c.all()[before:] {
+		if m.Type == "interrupt" {
+			interrupts++
+		}
+	}
+	if interrupts != 1 {
+		t.Errorf("interrupts = %d, want 1", interrupts)
+	}
+	select {
+	case prompt := <-stub.started:
+		if prompt != "rename it" {
+			t.Errorf("request = %q, want %q", prompt, "rename it")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("no run after hey VoiceCoder: %+v", c.all())
+	}
+	close(stub.release)
 }
