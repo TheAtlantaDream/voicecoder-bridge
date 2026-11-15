@@ -9,6 +9,9 @@ if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
   exec sleep infinity
 fi
 
+# Haiku unless a model is chosen.
+export ANTHROPIC_MODEL="${ANTHROPIC_MODEL:-claude-haiku-4-5}"
+
 mkdir -p "$project"
 [ -d "$project/.git" ] || git -C "$project" init -q
 git config --global user.email >/dev/null || {

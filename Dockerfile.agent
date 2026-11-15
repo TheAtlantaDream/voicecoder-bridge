@@ -16,5 +16,6 @@ RUN chmod +x /usr/local/bin/agent-entrypoint.sh \
 USER 1000:1000
 ENV HOME=/home/coder
 WORKDIR /home/coder
-EXPOSE 3284
+# 3284 is AgentAPI. 4173 is where the agent serves a site for the preview panel.
+EXPOSE 3284 4173
 ENTRYPOINT ["agent-entrypoint.sh"]

@@ -697,7 +697,12 @@ func (s *Server) submit(ctx context.Context, sess *session, send func(outbound),
 				log.Printf("write latest.diff: %v", werr)
 			}
 		}
+		var preview string
+		res.Summary, preview = splitPreview(res.Summary)
 		send(outbound{Type: "agent_result", Text: res.Summary, Diff: res.Diff})
+		if preview != "" {
+			send(outbound{Type: "preview", Text: preview})
+		}
 		s.speak(base, send, "summary", tts.SpokenText(res.Summary))
 		// Clear quietSpeech only after the result is on the wire so partials
 		// cannot sneak in while the UI still shows the agent working.

@@ -87,7 +87,7 @@ ANTHROPIC_API_KEY=... BRIDGE_AGENT=agentapi docker compose up --build
 | --- | --- | --- |
 | `BRIDGE_AGENT` | `none` | Passed to the bridge as `--agent`. Set `agentapi` to use the agent service. |
 | `ANTHROPIC_API_KEY` | empty | Key for Claude. Without it the agent service idles. Read it from the environment; never write it into a file in this repository. |
-| `ANTHROPIC_MODEL` | empty | Model Claude uses. Empty keeps Claude Code's default. |
+| `ANTHROPIC_MODEL` | `claude-haiku-4-5` | Model the coding agent uses. |
 | `BRIDGE_ALLOWED_ORIGINS` | empty | Extra origins added to `--allowed-origins`. |
 | `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID`, `ELEVENLABS_MODEL` | empty | Passed to the bridge. See Spoken summaries. |
 | `VC_HOME_VOLUME`, `VC_HOME_EXTERNAL` | `voicecoder-agent-home`, `false` | Name of the shared home volume, and whether it already exists. A Coder workspace sets these to its own home volume. |
@@ -152,6 +152,7 @@ Every message is JSON with a `type` and a `text`:
 | `agent_result` | `diff` | The task finished. `text` is the agent's summary and `diff` is the code changes. Only sent when an agent is set. |
 | `speech` | `audio`, `kind` | Text read aloud. `audio` is base64 MP3, `text` is what it says, and `kind` is `intro` (the one-time welcome), `summary`, `narration` (said while the agent works) or `reply` (an answer to the user mid-run). Only sent when ElevenLabs is set up. See Spoken summaries. |
 | `interrupt` | none | Stop playing speech now and drop any queued clips. Sent when the user says "hey Coder" or "stop" over a spoken summary, or "hey Coder" during an agent run. |
+| `preview` | `text` | `open` or `close`. The agent is serving a site on port 4173 of its container and asked for it to be shown or hidden. The web app shows it in a panel through its `/preview/` proxy. Sent right after `agent_result`. |
 | `error` | | Something failed. `text` is a plain sentence for the user. |
 
 Example result:
