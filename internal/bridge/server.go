@@ -277,8 +277,13 @@ func (s *Server) transcribeChunk(ctx context.Context, sess *session, send func(o
 	sess.mu.Lock()
 	sess.partials[seq] = text
 	endNow := s.endWord != "" && clean.HasEndWord(joinPartialsLocked(sess), s.endWord)
+	// Keep listening for "stop" while an agent run is in progress, but do
+	// not stream speech partials to the client until that run finishes.
+	agentBusy := sess.agentCancel != nil
 	sess.mu.Unlock()
-	send(outbound{Type: "partial", Seq: seq, Text: text})
+	if !agentBusy {
+		send(outbound{Type: "partial", Seq: seq, Text: text})
+	}
 	if endNow {
 		s.endUtterance(sess, send)
 	}
