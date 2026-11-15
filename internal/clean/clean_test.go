@@ -56,10 +56,28 @@ func TestStripWakeWordKeepsTextAfter(t *testing.T) {
 		{"um hey Coder fix this", "fix this"},
 		{"okay VoiceCoder, rename auth.py", "rename auth.py"},
 		{"no wake word here", "no wake word here"},
+		// Real Parakeet transcripts: wake mid-sentence after filler/ASR noise.
+		{
+			"Screw. Coder Initialize a new Project. Four pipe. using U V. Mm-hmm.",
+			"Initialize a new Project. Four pipe. using U V. Mm-hmm.",
+		},
+		{
+			"Yeah. Okay. Coder initial A new project. Using you. Yeah. Okay.",
+			"initial A new project. Using you. Yeah. Okay.",
+		},
 	}
 	for _, c := range cases {
 		if got := StripWakeWord(c.in); got != c.want {
 			t.Errorf("StripWakeWord(%q) = %q, want %q", c.in, got, c.want)
 		}
+	}
+}
+
+func TestHasWakeWordRejectsCodeWithoutR(t *testing.T) {
+	// ASR sometimes hears "Code" for "Coder". Bare "code" cannot be a wake
+	// word — it would steal the request from "fix the code in auth.py".
+	text := "The issue is Code. initialize a new project with you for Python. Mm-hmm."
+	if HasWakeWord(text) {
+		t.Errorf("expected no wake word in %q", text)
 	}
 }
