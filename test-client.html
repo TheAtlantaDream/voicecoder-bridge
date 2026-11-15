@@ -65,6 +65,7 @@ function connect() {
     else if (m.type === 'status') log('status: ' + m.text, 'status');
     else if (m.type === 'agent_partial') log('agent: ' + m.text, 'summary');
     else if (m.type === 'agent_result') showResult(m);
+    else if (m.type === 'speech') { log('speech: playing the summary aloud', 'status'); new Audio('data:audio/mpeg;base64,' + m.audio).play().catch((err) => log('speech error: ' + err.message, 'error')); }
     else if (m.type === 'error') log('error: ' + m.text, 'error');
     else log(ev.data);
   };

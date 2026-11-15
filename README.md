@@ -88,6 +88,7 @@ ANTHROPIC_API_KEY=... BRIDGE_AGENT=agentapi docker compose up --build
 | `ANTHROPIC_API_KEY` | empty | Key for Claude. Without it the agent service idles. Read it from the environment; never write it into a file in this repository. |
 | `ANTHROPIC_MODEL` | empty | Model Claude uses. Empty keeps Claude Code's default. |
 | `BRIDGE_ALLOWED_ORIGINS` | empty | Extra origins added to `--allowed-origins`. |
+| `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID`, `ELEVENLABS_MODEL` | empty | Passed to the bridge. See Spoken summaries. |
 | `VC_HOME_VOLUME`, `VC_HOME_EXTERNAL` | `voicecoder-agent-home`, `false` | Name of the shared home volume, and whether it already exists. A Coder workspace sets these to its own home volume. |
 
 - **Claude runs with `--dangerously-skip-permissions`.** It edits files and runs commands without asking. It can change anything in the shared home volume and reach the network.
@@ -147,6 +148,7 @@ Every message is JSON with a `type` and a `text`:
 | `status` | | A short line to show or read aloud. See the list below. |
 | `agent_partial` | | Live agent reply text while a task runs. Only with an agent that streams. |
 | `agent_result` | `diff` | The task finished. `text` is the agent's summary and `diff` is the code changes. Only sent when an agent is set. |
+| `speech` | `audio` | The agent's summary read aloud. `audio` is base64 MP3 and `text` is what it says. Sent right after `agent_result`, only when ElevenLabs is set up. See Spoken summaries. |
 | `error` | | Something failed. `text` is a plain sentence for the user. |
 
 Example result:
@@ -246,6 +248,26 @@ If the file already exists, add the rules under their heading instead of overwri
 
 The last rule matters to the bridge: the agent's final reply is what `agent_result` returns as `text`.
 
+## Spoken summaries
+
+With `ELEVENLABS_API_KEY` set in the bridge's environment, the bridge sends each agent summary to ElevenLabs and passes the audio to the web app:
+
+```
+{"type":"speech","text":"I added add(a, b) to math_utils.py and a test.","audio":"<base64 MP3>"}
+```
+
+- It arrives right after `agent_result`, so the summary and diff show without waiting for the audio.
+- Only the final summary is spoken. Status lines, streamed replies, errors, and stopped runs are not.
+- The web app plays it, for example `new Audio('data:audio/mpeg;base64,' + audio).play()`. Browsers only allow that after the user has clicked or typed on the page once.
+- If ElevenLabs fails, the bridge logs the reason and sends no `speech` message. The result is unaffected.
+- Summaries longer than 1200 characters are cut before they are spoken, because ElevenLabs bills per character.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `ELEVENLABS_API_KEY` | empty | ElevenLabs key. Empty turns speech off. Read from the environment only; never write it into a file in this repository. |
+| `ELEVENLABS_VOICE_ID` | `JBFqnCBsd6RMkjVDRZzb` | Voice to use. |
+| `ELEVENLABS_MODEL` | `eleven_flash_v2_5` | ElevenLabs model. Flash is their low-latency model. |
+
 ## Test page
 
-`test-client.html` connects to `ws://localhost:8000/ws`. It can record from the microphone or send typed text, and it shows every message, including the `agent_result` summary and diff.
+`test-client.html` connects to `ws://localhost:8000/ws`. It can record from the microphone or send typed text, and it shows every message, including the `agent_result` summary and diff, and plays `speech` audio.

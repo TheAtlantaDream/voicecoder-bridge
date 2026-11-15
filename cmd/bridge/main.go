@@ -14,6 +14,7 @@ import (
 
 	"github.com/theatlantadream/voicecoder-bridge/internal/agent"
 	"github.com/theatlantadream/voicecoder-bridge/internal/bridge"
+	"github.com/theatlantadream/voicecoder-bridge/internal/tts"
 	"github.com/theatlantadream/voicecoder-bridge/internal/whisper"
 )
 
@@ -59,6 +60,16 @@ func main() {
 		}
 		opts = append(opts, bridge.WithAllowedOrigins(origins))
 		log.Printf("allowed origins: %s", strings.Join(origins, ", "))
+	}
+
+	// The key comes from the environment only, so it never shows up in a
+	// process list or a compose file.
+	if key := strings.TrimSpace(os.Getenv("ELEVENLABS_API_KEY")); key != "" {
+		voice, model := os.Getenv("ELEVENLABS_VOICE_ID"), os.Getenv("ELEVENLABS_MODEL")
+		opts = append(opts, bridge.WithSpeaker(tts.NewElevenLabs(key, voice, model, os.Getenv("ELEVENLABS_URL"))))
+		log.Printf("speech: elevenlabs (agent summaries are read aloud)")
+	} else {
+		log.Printf("speech: none (ELEVENLABS_API_KEY is not set)")
 	}
 
 	srv := bridge.NewServer(transcriber, opts...)

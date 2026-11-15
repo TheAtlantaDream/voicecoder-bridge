@@ -2,7 +2,9 @@ package bridge
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/binary"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -588,5 +590,86 @@ func TestProgressStopsOnStop(t *testing.T) {
 	time.Sleep(10 * srv.progressEvery)
 	if got := c.all(); len(got) != n {
 		t.Errorf("messages after the run was stopped: %+v", got[n:])
+	}
+}
+
+type stubSpeaker struct {
+	mu    sync.Mutex
+	texts []string
+	audio []byte
+	err   error
+}
+
+func (s *stubSpeaker) Speak(ctx context.Context, text string) ([]byte, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.texts = append(s.texts, text)
+	return s.audio, s.err
+}
+
+// TestResultIsSpoken sends the summary as audio right after agent_result.
+func TestResultIsSpoken(t *testing.T) {
+	stub := newStubAgent()
+	speaker := &stubSpeaker{audio: []byte("mp3")}
+	srv := NewServer(&fakeTranscriber{}, WithAgent(stub), WithSpeaker(speaker))
+	sess := &session{partials: make(map[int]string)}
+	c := &collector{}
+
+	srv.handleControl(context.Background(), sess, c.send, control{Type: "text", Text: "add a function"})
+	waitStarted(t, stub)
+	close(stub.release)
+	speech := c.waitFor(t, "speech")
+
+	if speech.Text != stub.result.Summary || speech.Audio != base64.StdEncoding.EncodeToString([]byte("mp3")) {
+		t.Errorf("speech = %+v, want the summary text and base64 audio", speech)
+	}
+	got := c.all()
+	if n := len(got); n < 2 || got[n-2].Type != "agent_result" || got[n-1].Type != "speech" {
+		t.Errorf("messages = %+v, want agent_result then speech last", got)
+	}
+	if len(speaker.texts) != 1 || speaker.texts[0] != stub.result.Summary {
+		t.Errorf("spoken = %q, want only the summary", speaker.texts)
+	}
+}
+
+// TestSpeechFailureKeepsResult still delivers the result when speech fails.
+func TestSpeechFailureKeepsResult(t *testing.T) {
+	stub := newStubAgent()
+	speaker := &stubSpeaker{err: errors.New("quota exceeded")}
+	srv := NewServer(&fakeTranscriber{}, WithAgent(stub), WithSpeaker(speaker))
+	sess := &session{partials: make(map[int]string)}
+	c := &collector{}
+
+	srv.handleControl(context.Background(), sess, c.send, control{Type: "text", Text: "add a function"})
+	waitStarted(t, stub)
+	close(stub.release)
+	c.waitFor(t, "agent_result")
+	time.Sleep(50 * time.Millisecond)
+
+	for _, m := range c.all() {
+		if m.Type == "speech" || m.Type == "error" {
+			t.Errorf("got %+v, want no speech and no error shown to the user", m)
+		}
+	}
+}
+
+// TestStoppedRunIsNotSpoken says nothing aloud for a run that was stopped.
+func TestStoppedRunIsNotSpoken(t *testing.T) {
+	stub := newStubAgent()
+	speaker := &stubSpeaker{audio: []byte("mp3")}
+	srv := NewServer(&fakeTranscriber{}, WithAgent(stub), WithSpeaker(speaker))
+	sess := &session{partials: make(map[int]string)}
+	c := &collector{}
+
+	srv.handleControl(context.Background(), sess, c.send, control{Type: "text", Text: "add a function"})
+	waitStarted(t, stub)
+	srv.handleControl(context.Background(), sess, c.send, control{Type: "stop"})
+	c.waitFor(t, "error")
+	time.Sleep(50 * time.Millisecond)
+
+	speaker.mu.Lock()
+	defer speaker.mu.Unlock()
+	if len(speaker.texts) != 0 {
+		t.Errorf("spoken = %q, want nothing for a stopped run", speaker.texts)
 	}
 }
