@@ -1,6 +1,6 @@
 # voicecoder-bridge
 
-The bridge is the server between the VoiceCoder web app and the coding agent.
+Part of [VoiceCoder](https://github.com/TheAtlantaDream/VoiceCoder), a hands-free coding assistant. The bridge is the server between the VoiceCoder web app and the coding agent.
 
 - The web app sends microphone audio or typed text over a WebSocket.
 - The bridge turns audio into text with a local Parakeet TDT server (sherpa-onnx int8 CPU), then cleans the text (strips wake phrases like "hey VoiceCoder" / "hey Coder" / "Coder", filler words, and turns "auth dot py" into "auth.py").
