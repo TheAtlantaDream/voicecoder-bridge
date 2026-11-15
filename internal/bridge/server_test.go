@@ -419,11 +419,14 @@ func TestStopWithoutRunKeepsOldWording(t *testing.T) {
 func TestNoPartialsWhileAgentBusy(t *testing.T) {
 	stub := newStubAgent()
 	srv := NewServer(&fakeTranscriber{lines: []string{"hey Coder do something else"}}, WithAgent(stub))
-	sess := &session{partials: make(map[int]string)}
+	sess := &session{partials: make(map[int]string), armed: true, baseCtx: context.Background()}
 	c := &collector{}
 
 	srv.handleControl(context.Background(), sess, c.send, control{Type: "text", Text: "add a test"})
 	waitStarted(t, stub)
+	if !sess.quietSpeech {
+		t.Fatal("quietSpeech should be set once the agent run starts")
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -448,8 +451,23 @@ func TestNoPartialsWhileAgentBusy(t *testing.T) {
 		t.Errorf("partials[0] = %q, want transcript kept for stop/finish", stored)
 	}
 
+	// Non-stop speech while busy must not produce transcript/cleaned either.
+	sess.mu.Lock()
+	sess.partials = map[int]string{0: "hey Coder do another thing"}
+	sess.mu.Unlock()
+	before := len(c.all())
+	srv.finishUtterance(context.Background(), sess, c.send)
+	for _, m := range c.all()[before:] {
+		if m.Type == "partial" || m.Type == "transcript" || m.Type == "cleaned" {
+			t.Fatalf("got %s %q while agent busy; want silence", m.Type, m.Text)
+		}
+	}
+
 	close(stub.release)
 	c.waitFor(t, "agent_result")
+	if sess.quietSpeech {
+		t.Fatal("quietSpeech should clear after agent_result")
+	}
 }
 
 // TestSpokenStopWhileBusy checks that saying "Stop." during a run cancels

@@ -193,6 +193,10 @@ type session struct {
 	baseCtx     context.Context
 	agentCancel context.CancelFunc
 	agentRun    int
+	// quietSpeech is true from the moment an agent run starts until its
+	// agent_result/error has been sent. While set, speech partials (and
+	// non-stop transcripts) are not streamed to the client.
+	quietSpeech bool
 }
 
 func (s *Server) HandleWS(w http.ResponseWriter, r *http.Request) {
@@ -278,10 +282,10 @@ func (s *Server) transcribeChunk(ctx context.Context, sess *session, send func(o
 	sess.partials[seq] = text
 	endNow := s.endWord != "" && clean.HasEndWord(joinPartialsLocked(sess), s.endWord)
 	// Keep listening for "stop" while an agent run is in progress, but do
-	// not stream speech partials to the client until that run finishes.
-	agentBusy := sess.agentCancel != nil
+	// not stream speech partials to the client until that run's result is sent.
+	quiet := sess.quietSpeech
 	sess.mu.Unlock()
-	if !agentBusy {
+	if !quiet {
 		send(outbound{Type: "partial", Seq: seq, Text: text})
 	}
 	if endNow {
@@ -364,6 +368,7 @@ func (s *Server) finishUtterance(ctx context.Context, sess *session, send func(o
 	joined := joinPartialsLocked(sess)
 	armed := sess.armed
 	base := sess.baseCtx
+	quiet := sess.quietSpeech
 	sess.mu.Unlock()
 
 	rearm := func() {
@@ -377,20 +382,34 @@ func (s *Server) finishUtterance(ctx context.Context, sess *session, send func(o
 	}
 
 	if joined == "" {
+		if quiet {
+			// Ignore empty hush while the agent works; stay armed for "stop".
+			rearm()
+			return
+		}
 		send(outbound{Type: "error", Text: "I did not hear anything. Try again, a little closer to the mic."})
 		rearm()
 		return
 	}
-	send(outbound{Type: "transcript", Text: joined})
 
-	// Spoken requests need the wake word. Stop/cancel still work without it.
+	// Spoken stop/cancel must work even while quietSpeech is set.
 	if isStopWord(clean.StripWakeWord(joined)) || isStopWord(joined) {
+		send(outbound{Type: "transcript", Text: joined})
 		cleaned := clean.CleanEnd(joined, s.endWord)
 		send(outbound{Type: "cleaned", Text: cleaned})
 		s.submit(ctx, sess, send, cleaned)
 		rearm()
 		return
 	}
+
+	// While the agent is working, swallow other speech so the UI stays quiet.
+	if quiet {
+		rearm()
+		return
+	}
+
+	send(outbound{Type: "transcript", Text: joined})
+
 	if !clean.HasWakeWord(joined) {
 		send(outbound{Type: "status", Text: "Say hey VoiceCoder, hey Coder, or Coder, then your request."})
 		rearm()
@@ -413,6 +432,8 @@ func (s *Server) cancelAgent(sess *session) bool {
 	}
 	sess.agentCancel()
 	sess.agentCancel = nil
+	// quietSpeech stays set until endAgentQuiet so in-flight chunks cannot
+	// emit partials during teardown.
 	return true
 }
 
@@ -446,8 +467,10 @@ func (s *Server) submit(ctx context.Context, sess *session, send func(outbound),
 	}
 	agentCtx, cancel := context.WithCancel(base)
 	sess.agentCancel = cancel
+	sess.quietSpeech = true
 	sess.agentRun++
 	run := sess.agentRun
+	armed := sess.armed
 	sess.mu.Unlock()
 
 	send(outbound{Type: "status", Text: "Working on it."})
@@ -495,20 +518,16 @@ func (s *Server) submit(ctx context.Context, sess *session, send func(outbound),
 			}
 		}
 		res, err := out.res, out.err
-
-		sess.mu.Lock()
-		if sess.agentRun == run {
-			sess.agentCancel = nil
-		}
-		sess.mu.Unlock()
 		cancel()
 
 		if errors.Is(err, context.Canceled) {
 			send(outbound{Type: "error", Text: "Stopped."})
+			s.endAgentQuiet(sess, run, armed, base, send)
 			return
 		}
 		if err != nil {
 			send(outbound{Type: "error", Text: err.Error()})
+			s.endAgentQuiet(sess, run, armed, base, send)
 			return
 		}
 		if s.repo != "" {
@@ -518,7 +537,30 @@ func (s *Server) submit(ctx context.Context, sess *session, send func(outbound),
 		}
 		send(outbound{Type: "agent_result", Text: res.Summary, Diff: res.Diff})
 		s.speak(base, send, res.Summary)
+		// Clear quietSpeech only after the result is on the wire so partials
+		// cannot sneak in while the UI still shows the agent working.
+		s.endAgentQuiet(sess, run, armed, base, send)
 	}()
+}
+
+// endAgentQuiet marks the agent run finished and re-opens listening for the
+// next request. quietSpeech stays set until this runs so late partials from
+// the previous utterance never reach the client mid-result.
+func (s *Server) endAgentQuiet(sess *session, run int, armed bool, base context.Context, send func(outbound)) {
+	sess.mu.Lock()
+	if sess.agentRun == run {
+		sess.agentCancel = nil
+		sess.quietSpeech = false
+	}
+	stillArmed := armed && sess.armed
+	sess.mu.Unlock()
+	if !stillArmed {
+		return
+	}
+	if base == nil {
+		base = context.Background()
+	}
+	s.armListening(base, sess, send)
 }
 
 // speak sends text as a "speech" message. The result is already on screen, so
