@@ -19,7 +19,7 @@ const (
 	defaultURL   = "https://api.anthropic.com"
 	defaultModel = "claude-haiku-4-5"
 	apiVersion   = "2023-06-01"
-	maxTokens    = 300
+	maxTokens    = 1024
 )
 
 // Message is one turn of a conversation. Role is "user" or "assistant".
@@ -89,6 +89,7 @@ func (a *Anthropic) Reply(ctx context.Context, system string, msgs []Message) (s
 			Type string `json:"type"`
 			Text string `json:"text"`
 		} `json:"content"`
+		StopReason string `json:"stop_reason"`
 	}
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return "", errors.New("chat: unreadable reply")
@@ -101,7 +102,11 @@ func (a *Anthropic) Reply(ctx context.Context, system string, msgs []Message) (s
 	}
 	text := strings.TrimSpace(sb.String())
 	if text == "" {
-		return "", errors.New("chat: empty reply")
+		kinds := make([]string, 0, len(out.Content))
+		for _, c := range out.Content {
+			kinds = append(kinds, c.Type)
+		}
+		return "", fmt.Errorf("chat: empty reply (stop_reason=%q blocks=%v)", out.StopReason, kinds)
 	}
 	return text, nil
 }

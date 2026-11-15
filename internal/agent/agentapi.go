@@ -360,6 +360,8 @@ func (a *AgentAPI) interrupt() {
 var (
 	ansiRe = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
 	listRe = regexp.MustCompile(`^([-*•+]|\d+[.)])\s`)
+	// Claude Code's own status line under a reply, e.g. "✻ Sautéed for 7s · done 5:25 AM".
+	footerRe = regexp.MustCompile(`^[^\p{L}\p{N}\s]\s+\p{L}+ for \d+(\.\d+)?\s?(ms|s|m|h)( \d+\s?(s|m))*(\s+·.*)?$`)
 )
 
 // unwrap turns a terminal-formatted message back into normal sentences. A
@@ -375,6 +377,9 @@ func unwrap(text string) string {
 	for _, raw := range strings.Split(text, "\n") {
 		raw = strings.TrimRight(raw, " \t")
 		line := strings.TrimSpace(raw)
+		if footerRe.MatchString(line) {
+			continue
+		}
 		if line == "" {
 			if len(out) > 0 && out[len(out)-1] != "" {
 				out = append(out, "")

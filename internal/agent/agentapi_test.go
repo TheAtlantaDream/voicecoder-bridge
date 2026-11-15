@@ -259,3 +259,14 @@ func TestUnwrap(t *testing.T) {
 		}
 	}
 }
+
+func TestUnwrapDropsClaudeStatusLine(t *testing.T) {
+	in := "  Summary:\n  All done. Want anything else?\n\n✻ Sautéed for 7s · done 5:25 AM   \n"
+	if got, want := unwrap(in), "Summary:\nAll done. Want anything else?"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	keep := "- Waited for 5s before retrying"
+	if got := unwrap(keep); got != keep {
+		t.Fatalf("ordinary line was dropped: %q", got)
+	}
+}
