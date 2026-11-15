@@ -32,12 +32,15 @@ var blankRe = regexp.MustCompile(`\[.*?\]`)
 type Server struct {
 	transcriber whisper.Transcriber
 	upgrader    websocket.Upgrader
-	silenceRMS  float64
-	silenceFor  time.Duration
-	agent       agent.Agent
-	repo        string
-	origins     []string
-	speaker     Speaker
+	silenceRMS float64
+	silenceFor time.Duration
+	// endWord, when non-empty, ends an utterance as soon as a partial
+	// transcript contains that whole word (in addition to silence).
+	endWord string
+	agent   agent.Agent
+	repo    string
+	origins []string
+	speaker Speaker
 	// progressEvery is how often a running agent reports that it is still
 	// working when no partials have arrived yet. Tests shorten it.
 	progressEvery time.Duration
@@ -62,6 +65,15 @@ func WithSilence(rms float64, d time.Duration) Option {
 	return func(s *Server) {
 		s.silenceRMS = rms
 		s.silenceFor = d
+	}
+}
+
+// WithEndWord ends a spoken utterance when this whole word appears in the
+// live transcript (for example "over" or "send"). Empty disables it; silence
+// still ends utterances as usual.
+func WithEndWord(word string) Option {
+	return func(s *Server) {
+		s.endWord = strings.TrimSpace(word)
 	}
 }
 
@@ -264,8 +276,29 @@ func (s *Server) transcribeChunk(ctx context.Context, sess *session, send func(o
 	}
 	sess.mu.Lock()
 	sess.partials[seq] = text
+	endNow := s.endWord != "" && clean.HasEndWord(joinPartialsLocked(sess), s.endWord)
 	sess.mu.Unlock()
 	send(outbound{Type: "partial", Seq: seq, Text: text})
+	if endNow {
+		s.endUtterance(sess, send)
+	}
+}
+
+// joinPartialsLocked joins partial transcripts in seq order. Caller must hold sess.mu.
+func joinPartialsLocked(sess *session) string {
+	seqs := make([]int, 0, len(sess.partials))
+	for seq := range sess.partials {
+		seqs = append(seqs, seq)
+	}
+	sort.Ints(seqs)
+	var b strings.Builder
+	for i, seq := range seqs {
+		if i > 0 {
+			b.WriteByte(' ')
+		}
+		b.WriteString(sess.partials[seq])
+	}
+	return b.String()
 }
 
 func (s *Server) handleControl(ctx context.Context, sess *session, send func(outbound), c control) {
@@ -291,10 +324,7 @@ func (s *Server) handleControl(ctx context.Context, sess *session, send func(out
 		}
 
 	case "text":
-		if clean.HasWakeWord(c.Text) {
-			c.Text = clean.StripWakeWord(c.Text)
-		}
-		cleaned := clean.Clean(c.Text)
+		cleaned := clean.CleanEnd(c.Text, s.endWord)
 		send(outbound{Type: "cleaned", Text: cleaned})
 		s.submit(ctx, sess, send, cleaned)
 	default:
@@ -326,18 +356,7 @@ func (s *Server) finishUtterance(ctx context.Context, sess *session, send func(o
 	sess.pending.Wait()
 
 	sess.mu.Lock()
-	seqs := make([]int, 0, len(sess.partials))
-	for seq := range sess.partials {
-		seqs = append(seqs, seq)
-	}
-	sort.Ints(seqs)
-	joined := ""
-	for _, seq := range seqs {
-		if joined != "" {
-			joined += " "
-		}
-		joined += sess.partials[seq]
-	}
+	joined := joinPartialsLocked(sess)
 	armed := sess.armed
 	base := sess.baseCtx
 	sess.mu.Unlock()
@@ -361,7 +380,7 @@ func (s *Server) finishUtterance(ctx context.Context, sess *session, send func(o
 
 	// Spoken requests need the wake word. Stop/cancel still work without it.
 	if isStopWord(clean.StripWakeWord(joined)) || isStopWord(joined) {
-		cleaned := clean.Clean(joined)
+		cleaned := clean.CleanEnd(joined, s.endWord)
 		send(outbound{Type: "cleaned", Text: cleaned})
 		s.submit(ctx, sess, send, cleaned)
 		rearm()
@@ -373,7 +392,7 @@ func (s *Server) finishUtterance(ctx context.Context, sess *session, send func(o
 		return
 	}
 
-	cleaned := clean.Clean(joined)
+	cleaned := clean.CleanEnd(joined, s.endWord)
 	send(outbound{Type: "cleaned", Text: cleaned})
 	s.submit(ctx, sess, send, cleaned)
 	rearm()

@@ -81,3 +81,24 @@ func TestHasWakeWordRejectsCodeWithoutR(t *testing.T) {
 		t.Errorf("expected no wake word in %q", text)
 	}
 }
+
+func TestEndWord(t *testing.T) {
+	if HasEndWord("fix the login bug over", "") {
+		t.Fatal("empty end word must not match")
+	}
+	if !HasEndWord("fix the login bug over", "over") {
+		t.Fatal("expected end word in utterance")
+	}
+	if HasEndWord("override the defaults", "over") {
+		t.Fatal("end word must not match inside another word")
+	}
+	if got := StripEndWord("fix the login bug over please", "over"); got != "fix the login bug" {
+		t.Errorf("StripEndWord = %q, want request before end word", got)
+	}
+	if got := CleanEnd("hey Coder fix auth dot py over", "over"); got != "fix auth.py" {
+		t.Errorf("CleanEnd = %q, want wake+end stripped", got)
+	}
+	if got := CleanEnd("hey Coder fix auth.py", "over"); got != "fix auth.py" {
+		t.Errorf("CleanEnd without end word = %q", got)
+	}
+}

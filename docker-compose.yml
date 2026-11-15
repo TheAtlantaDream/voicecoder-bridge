@@ -34,6 +34,8 @@ services:
       --repo /home/coder/project
     environment:
       BRIDGE_ALLOWED_ORIGINS: ${BRIDGE_ALLOWED_ORIGINS:-}
+      # Optional spoken end word (also --end-word). Empty keeps silence-only ending.
+      BRIDGE_END_WORD: ${BRIDGE_END_WORD:-}
       # Reads agent summaries aloud. Empty leaves speech off.
       ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
       ELEVENLABS_VOICE_ID: ${ELEVENLABS_VOICE_ID:-}

@@ -23,6 +23,7 @@ func main() {
 	whisperURL := flag.String("whisper-url", "http://localhost:8080", "base URL of the local Whisper STT server")
 	silenceRMS := flag.Float64("silence-rms", 500, "16-bit RMS level below which counts as silence")
 	silenceSecs := flag.Float64("silence-secs", 1.5, "seconds of silence after speech that end an utterance")
+	endWord := flag.String("end-word", "", "optional spoken word that ends an utterance early (e.g. over, send); empty keeps silence-only ending; BRIDGE_END_WORD is used when this flag is empty")
 	agentName := flag.String("agent", "none", "coding agent to send cleaned requests to: none, fake, agentapi, or claude")
 	agentAPIURL := flag.String("agentapi-url", "http://localhost:3284", "base URL of the AgentAPI server")
 	repo := flag.String("repo", "~/project", "project folder the agent works in")
@@ -35,6 +36,14 @@ func main() {
 	transcriber := whisper.NewHTTPClient(*whisperURL, 60*time.Second)
 
 	opts := []bridge.Option{bridge.WithSilence(*silenceRMS, time.Duration(*silenceSecs*float64(time.Second)))}
+	ew := strings.TrimSpace(*endWord)
+	if ew == "" {
+		ew = strings.TrimSpace(os.Getenv("BRIDGE_END_WORD"))
+	}
+	if ew != "" {
+		opts = append(opts, bridge.WithEndWord(ew))
+		log.Printf("end word: %q (utterance ends on this word or silence)", ew)
+	}
 	switch *agentName {
 	case "none":
 		log.Printf("agent: none (transcribe and clean only)")
