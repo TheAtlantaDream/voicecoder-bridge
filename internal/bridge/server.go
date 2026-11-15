@@ -2,6 +2,7 @@ package bridge
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -36,12 +37,26 @@ type Server struct {
 	agent       agent.Agent
 	repo        string
 	origins     []string
+	speaker     Speaker
 	// progressEvery is how often a running agent reports that it is still
 	// working when no partials have arrived yet. Tests shorten it.
 	progressEvery time.Duration
 }
 
 type Option func(*Server)
+
+// Speaker turns text into MP3 audio.
+type Speaker interface {
+	Speak(ctx context.Context, text string) ([]byte, error)
+}
+
+// WithSpeaker reads each agent summary aloud: after agent_result the bridge
+// sends a "speech" message carrying the audio. Without it nothing is spoken.
+func WithSpeaker(sp Speaker) Option {
+	return func(s *Server) {
+		s.speaker = sp
+	}
+}
 
 func WithSilence(rms float64, d time.Duration) Option {
 	return func(s *Server) {
@@ -145,6 +160,8 @@ type outbound struct {
 	Seq  int    `json:"seq"`
 	Text string `json:"text,omitempty"`
 	Diff string `json:"diff,omitempty"`
+	// Audio is base64 MP3. Only set on a "speech" message.
+	Audio string `json:"audio,omitempty"`
 }
 
 type session struct {
@@ -476,7 +493,25 @@ func (s *Server) submit(ctx context.Context, sess *session, send func(outbound),
 			}
 		}
 		send(outbound{Type: "agent_result", Text: res.Summary, Diff: res.Diff})
+		s.speak(base, send, res.Summary)
 	}()
+}
+
+// speak sends text as a "speech" message. The result is already on screen, so
+// a failure here is logged and otherwise ignored.
+func (s *Server) speak(ctx context.Context, send func(outbound), text string) {
+	if s.speaker == nil || strings.TrimSpace(text) == "" {
+		return
+	}
+	audio, err := s.speaker.Speak(ctx, text)
+	if err != nil {
+		log.Printf("speech: %v", err)
+		return
+	}
+	if len(audio) == 0 {
+		return
+	}
+	send(outbound{Type: "speech", Text: text, Audio: base64.StdEncoding.EncodeToString(audio)})
 }
 
 func (s *Server) autoEndDue(sess *session, now time.Time) bool {

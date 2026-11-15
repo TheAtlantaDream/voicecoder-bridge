@@ -34,6 +34,10 @@ services:
       --repo /home/coder/project
     environment:
       BRIDGE_ALLOWED_ORIGINS: ${BRIDGE_ALLOWED_ORIGINS:-}
+      # Reads agent summaries aloud. Empty leaves speech off.
+      ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
+      ELEVENLABS_VOICE_ID: ${ELEVENLABS_VOICE_ID:-}
+      ELEVENLABS_MODEL: ${ELEVENLABS_MODEL:-}
     ports:
       - "${BRIDGE_PUBLISH:-8000:8000}"
     volumes:
