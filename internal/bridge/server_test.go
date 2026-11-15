@@ -300,6 +300,50 @@ func TestSpokenRequestRunsAgent(t *testing.T) {
 	c.waitFor(t, "agent_result")
 }
 
+// TestSpokenEndWordStripsTail drops the end word and anything after it.
+func TestSpokenEndWordStripsTail(t *testing.T) {
+	stub := newStubAgent()
+	srv := NewServer(&fakeTranscriber{}, WithAgent(stub), WithEndWord("over"))
+	sess := &session{
+		partials: map[int]string{0: "hey Coder fix the login bug over thanks"},
+		armed:    true,
+		baseCtx:  context.Background(),
+	}
+	c := &collector{}
+
+	srv.finishUtterance(context.Background(), sess, c.send)
+	if prompt := waitStarted(t, stub); prompt != "fix the login bug" {
+		t.Errorf("agent prompt = %q, want end word stripped", prompt)
+	}
+	close(stub.release)
+	c.waitFor(t, "agent_result")
+}
+
+// TestPartialEndWordEndsUtterance finishes as soon as a partial contains the end word.
+func TestPartialEndWordEndsUtterance(t *testing.T) {
+	stub := newStubAgent()
+	srv := NewServer(&fakeTranscriber{lines: []string{"over"}}, WithAgent(stub), WithEndWord("over"))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sess := &session{
+		listening: true,
+		armed:     true,
+		partials:  map[int]string{0: "hey Coder add a test"},
+		runCtx:    ctx,
+		cancel:    cancel,
+		baseCtx:   context.Background(),
+	}
+	c := &collector{}
+
+	sess.pending.Add(1)
+	srv.transcribeChunk(ctx, sess, c.send, 1, make([]byte, 4))
+	if prompt := waitStarted(t, stub); prompt != "add a test" {
+		t.Errorf("agent prompt = %q, want request before end word", prompt)
+	}
+	close(stub.release)
+	c.waitFor(t, "agent_result")
+}
+
 // TestSecondRequestWhileBusy checks a request during a run is refused
 // with the busy status and never reaches the agent.
 func TestSecondRequestWhileBusy(t *testing.T) {

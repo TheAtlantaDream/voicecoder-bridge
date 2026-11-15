@@ -41,8 +41,50 @@ func StripWakeWord(text string) string {
 	return strings.TrimSpace(text[loc[1]:])
 }
 
+// endWordRe builds a word-boundary matcher for an optional spoken end phrase
+// (for example "over" or "send"). Empty word disables matching.
+func endWordRe(word string) *regexp.Regexp {
+	word = strings.TrimSpace(word)
+	if word == "" {
+		return nil
+	}
+	return regexp.MustCompile(`(?i)(?:^|\W)` + regexp.QuoteMeta(word) + `\b[.,!\s]*`)
+}
+
+// HasEndWord reports whether text contains the configured end word as a
+// whole word. An empty end word never matches.
+func HasEndWord(text, word string) bool {
+	re := endWordRe(word)
+	if re == nil {
+		return false
+	}
+	return re.FindStringIndex(text) != nil
+}
+
+// StripEndWord returns the text before the first end word, dropping the end
+// word and anything after it. If there is no end word (or word is empty),
+// the original text is returned.
+func StripEndWord(text, word string) string {
+	re := endWordRe(word)
+	if re == nil {
+		return strings.TrimSpace(text)
+	}
+	loc := re.FindStringIndex(text)
+	if loc == nil {
+		return strings.TrimSpace(text)
+	}
+	return strings.TrimSpace(text[:loc[0]])
+}
+
 func Clean(text string) string {
+	return CleanEnd(text, "")
+}
+
+// CleanEnd is Clean plus an optional end word: after the wake phrase is
+// stripped, the end word and everything after it are dropped.
+func CleanEnd(text, endWord string) string {
 	text = StripWakeWord(text)
+	text = StripEndWord(text, endWord)
 
 	words := spaceRe.Split(strings.TrimSpace(text), -1)
 	kept := words[:0]

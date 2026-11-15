@@ -43,6 +43,7 @@ Run the tests with `go test -race ./...`.
 | `--whisper-url` | `http://localhost:8080` | Base URL of the local Whisper STT server. |
 | `--silence-rms` | `500` | 16-bit loudness below which audio counts as silence. |
 | `--silence-secs` | `1.5` | Seconds of silence after speech that end an utterance. |
+| `--end-word` | empty | Optional whole word that ends an utterance as soon as it appears in a partial transcript (for example `over` or `send`). The word and anything after it are dropped from the cleaned request. Empty keeps silence-only ending. `BRIDGE_END_WORD` is used when the flag is empty. |
 | `--agent` | `none` | Coding agent: `none`, `fake`, `agentapi`, or `claude`. |
 | `--agentapi-url` | `http://localhost:3284` | Base URL of the AgentAPI server. Used with `--agent=agentapi`. |
 | `--repo` | `~/project` | Project folder the agent works in. The diff is read from here. Used with `--agent=agentapi` and `--agent=claude`. |
@@ -159,7 +160,7 @@ Example result:
 
 A typed request with an agent set gives, in order: `cleaned`, `status` "Working on it.", zero or more `agent_partial` lines (or progress `status` if none yet), then `agent_result` or `error`.
 
-Spoken requests need a wake phrase somewhere in the utterance: "hey VoiceCoder", "VoiceCoder", "hey Coder", or "Coder". Text before the wake phrase is dropped; everything after it until silence is the request. Without a wake phrase the bridge sends a status reminder and keeps listening. After each spoken utterance it re-arms automatically so the mic can stay open. Typed `text` does not need a wake phrase.
+Spoken requests need a wake phrase somewhere in the utterance: "hey VoiceCoder", "VoiceCoder", "hey Coder", or "Coder". Text before the wake phrase is dropped; everything after it until silence (or an optional `--end-word`) is the request. Without a wake phrase the bridge sends a status reminder and keeps listening. After each spoken utterance it re-arms automatically so the mic can stay open. Typed `text` does not need a wake phrase.
 
 ### The `diff` field
 
