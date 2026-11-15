@@ -143,7 +143,7 @@ Every message is JSON with a `type` and a `text`:
 
 | Type | Other fields | Meaning |
 | --- | --- | --- |
-| `partial` | `seq` | Text of one audio chunk while the user is still talking. `seq` is the chunk number. |
+| `partial` | `seq` | Text of one audio chunk while the user is still talking. `seq` is the chunk number. Not sent while an agent run is in progress (listening still continues so spoken "stop" works). |
 | `transcript` | | The whole spoken request, joined in order. |
 | `cleaned` | | The request after cleaning. This is what the agent receives. |
 | `status` | | A short line to show or read aloud. See the list below. |

@@ -414,6 +414,44 @@ func TestStopWithoutRunKeepsOldWording(t *testing.T) {
 	}
 }
 
+// TestNoPartialsWhileAgentBusy keeps live speech off the wire during a run
+// so the UI is not flooded with partials; transcription still runs so "stop" works.
+func TestNoPartialsWhileAgentBusy(t *testing.T) {
+	stub := newStubAgent()
+	srv := NewServer(&fakeTranscriber{lines: []string{"hey Coder do something else"}}, WithAgent(stub))
+	sess := &session{partials: make(map[int]string)}
+	c := &collector{}
+
+	srv.handleControl(context.Background(), sess, c.send, control{Type: "text", Text: "add a test"})
+	waitStarted(t, stub)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sess.mu.Lock()
+	sess.listening = true
+	sess.runCtx = ctx
+	sess.cancel = cancel
+	sess.mu.Unlock()
+
+	sess.pending.Add(1)
+	srv.transcribeChunk(ctx, sess, c.send, 0, make([]byte, 4))
+
+	for _, m := range c.all() {
+		if m.Type == "partial" {
+			t.Fatalf("got partial %q while agent busy; want none", m.Text)
+		}
+	}
+	sess.mu.Lock()
+	stored := sess.partials[0]
+	sess.mu.Unlock()
+	if stored != "hey Coder do something else" {
+		t.Errorf("partials[0] = %q, want transcript kept for stop/finish", stored)
+	}
+
+	close(stub.release)
+	c.waitFor(t, "agent_result")
+}
+
 // TestSpokenStopWhileBusy checks that saying "Stop." during a run cancels
 // it instead of being sent to the agent as a task.
 func TestSpokenStopWhileBusy(t *testing.T) {
