@@ -157,7 +157,7 @@ Example result:
 
 A typed request with an agent set gives, in order: `cleaned`, `status` "Working on it.", zero or more `agent_partial` lines (or progress `status` if none yet), then `agent_result` or `error`.
 
-Spoken requests must start with a wake phrase: "hey VoiceCoder", "VoiceCoder", "hey Coder", or "Coder". Without one the bridge sends a status reminder and keeps listening. After each spoken utterance it re-arms automatically so the mic can stay open. Typed `text` does not need a wake phrase.
+Spoken requests need a wake phrase somewhere in the utterance: "hey VoiceCoder", "VoiceCoder", "hey Coder", or "Coder". Text before the wake phrase is dropped; everything after it until silence is the request. Without a wake phrase the bridge sends a status reminder and keeps listening. After each spoken utterance it re-arms automatically so the mic can stay open. Typed `text` does not need a wake phrase.
 
 ### The `diff` field
 
