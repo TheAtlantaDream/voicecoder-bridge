@@ -27,6 +27,17 @@ var fillers = map[string]bool{
 	"um": true, "uh": true, "erm": true, "hmm": true,
 }
 
+// interruptRe is the stricter phrase that cuts in on the agent or on a
+// spoken summary: it needs "hey", so a passing mention of "coder" in the
+// room does not cancel work in progress.
+var interruptRe = regexp.MustCompile(`(?i)(?:^|\W)hey[\s,.!]*(?:voice\s*)?coder\b`)
+
+// HasInterruptPhrase reports whether text contains "hey Coder" or
+// "hey VoiceCoder".
+func HasInterruptPhrase(text string) bool {
+	return interruptRe.MatchString(text)
+}
+
 func HasWakeWord(text string) bool {
 	return wakeRe.FindStringIndex(text) != nil
 }

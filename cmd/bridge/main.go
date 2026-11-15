@@ -14,6 +14,7 @@ import (
 
 	"github.com/theatlantadream/voicecoder-bridge/internal/agent"
 	"github.com/theatlantadream/voicecoder-bridge/internal/bridge"
+	"github.com/theatlantadream/voicecoder-bridge/internal/chat"
 	"github.com/theatlantadream/voicecoder-bridge/internal/tts"
 	"github.com/theatlantadream/voicecoder-bridge/internal/whisper"
 )
@@ -77,8 +78,41 @@ func main() {
 		voice, model := os.Getenv("ELEVENLABS_VOICE_ID"), os.Getenv("ELEVENLABS_MODEL")
 		opts = append(opts, bridge.WithSpeaker(tts.NewElevenLabs(key, voice, model, os.Getenv("ELEVENLABS_URL"))))
 		log.Printf("speech: elevenlabs (agent summaries are read aloud)")
+		// BRIDGE_INTRO replaces the welcome text; "off" turns it off.
+		intro := strings.TrimSpace(os.Getenv("BRIDGE_INTRO"))
+		if intro == "" {
+			intro = bridge.DefaultIntro
+		}
+		if *agentName != "none" && !strings.EqualFold(intro, "off") {
+			marker := strings.TrimSpace(os.Getenv("BRIDGE_INTRO_FILE"))
+			if marker == "" && *agentName != "fake" {
+				// Next to the project, not in it, so it survives restarts
+				// without showing up in diffs.
+				marker = filepath.Join(filepath.Dir(expandHome(*repo)), ".voicecoder", "intro-played")
+			}
+			opts = append(opts, bridge.WithIntro(intro, marker))
+			log.Printf("intro: spoken once after the first request (marker=%q)", marker)
+		}
 	} else {
 		log.Printf("speech: none (ELEVENLABS_API_KEY is not set)")
+	}
+
+	// A second, quick Claude call lets the bridge narrate a running agent
+	// and answer the user without stopping it. BRIDGE_TALK=off turns it off.
+	if key := strings.TrimSpace(os.Getenv("ANTHROPIC_API_KEY")); key != "" && *agentName != "none" &&
+		!strings.EqualFold(strings.TrimSpace(os.Getenv("BRIDGE_TALK")), "off") {
+		model := strings.TrimSpace(os.Getenv("BRIDGE_TALK_MODEL"))
+		if model == "" {
+			model = strings.TrimSpace(os.Getenv("ANTHROPIC_MODEL"))
+		}
+		profile := strings.TrimSpace(os.Getenv("BRIDGE_PROFILE_FILE"))
+		if profile == "" {
+			profile = filepath.Join(filepath.Dir(expandHome(*repo)), ".voicecoder", "profile.md")
+		}
+		opts = append(opts, bridge.WithChatter(chat.NewAnthropic(key, model, os.Getenv("ANTHROPIC_BASE_URL")), profile))
+		log.Printf("talk: on (narrates the agent and answers while it works; profile=%q)", profile)
+	} else {
+		log.Printf("talk: off")
 	}
 
 	srv := bridge.NewServer(transcriber, opts...)

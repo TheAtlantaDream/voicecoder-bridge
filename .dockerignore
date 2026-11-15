@@ -1,6 +1,7 @@
 .git
 .gitignore
 *.md
+!agent-rules.md
 test-client.html
 **/agent_test.go
 **/*_test.go

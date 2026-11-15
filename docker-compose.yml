@@ -40,6 +40,13 @@ services:
       ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
       ELEVENLABS_VOICE_ID: ${ELEVENLABS_VOICE_ID:-}
       ELEVENLABS_MODEL: ${ELEVENLABS_MODEL:-}
+      # Lets the bridge narrate the agent and answer the user while it works,
+      # with short Claude calls of its own. BRIDGE_TALK=off turns that off.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-}
+      BRIDGE_TALK: ${BRIDGE_TALK:-}
+      # Welcome spoken once after the first request. "off" turns it off.
+      BRIDGE_INTRO: ${BRIDGE_INTRO:-}
     ports:
       - "${BRIDGE_PUBLISH:-8000:8000}"
     volumes:

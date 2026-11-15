@@ -9,11 +9,13 @@ RUN npm install -g @anthropic-ai/claude-code \
       "https://github.com/coder/agentapi/releases/latest/download/agentapi-linux-${TARGETARCH:-amd64}" \
     && chmod +x /usr/local/bin/agentapi
 COPY agent-entrypoint.sh /usr/local/bin/agent-entrypoint.sh
+COPY agent-rules.md /usr/local/share/voicecoder/agent-rules.md
 RUN chmod +x /usr/local/bin/agent-entrypoint.sh \
     && mkdir -p /home/coder && chown 1000:1000 /home/coder
 # Same user id as the Coder workspace, so files in the shared home keep one owner.
 USER 1000:1000
 ENV HOME=/home/coder
 WORKDIR /home/coder
-EXPOSE 3284
+# 3284 is AgentAPI. 4173 is where the agent serves a site for the preview panel.
+EXPOSE 3284 4173
 ENTRYPOINT ["agent-entrypoint.sh"]

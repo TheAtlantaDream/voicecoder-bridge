@@ -87,7 +87,7 @@ ANTHROPIC_API_KEY=... BRIDGE_AGENT=agentapi docker compose up --build
 | --- | --- | --- |
 | `BRIDGE_AGENT` | `none` | Passed to the bridge as `--agent`. Set `agentapi` to use the agent service. |
 | `ANTHROPIC_API_KEY` | empty | Key for Claude. Without it the agent service idles. Read it from the environment; never write it into a file in this repository. |
-| `ANTHROPIC_MODEL` | empty | Model Claude uses. Empty keeps Claude Code's default. |
+| `ANTHROPIC_MODEL` | `claude-haiku-4-5` | Model the coding agent uses. |
 | `BRIDGE_ALLOWED_ORIGINS` | empty | Extra origins added to `--allowed-origins`. |
 | `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID`, `ELEVENLABS_MODEL` | empty | Passed to the bridge. See Spoken summaries. |
 | `VC_HOME_VOLUME`, `VC_HOME_EXTERNAL` | `voicecoder-agent-home`, `false` | Name of the shared home volume, and whether it already exists. A Coder workspace sets these to its own home volume. |
@@ -134,6 +134,7 @@ Text frames are JSON:
 | `{"type":"end"}` | The spoken request is finished. The bridge also ends it by itself after `--silence-secs` of silence. |
 | `{"type":"stop"}` | Stop listening and cancel a running task. See [Stop](#stop). |
 | `{"type":"text","text":"..."}` | A typed request. |
+| `{"type":"speech_start"}`, `{"type":"speech_end"}` | The client started or finished playing a `summary` clip. See [Cutting in](#cutting-in). |
 
 Binary frames are audio: 16 kHz, 16-bit, mono PCM.
 
@@ -149,7 +150,9 @@ Every message is JSON with a `type` and a `text`:
 | `status` | | A short line to show or read aloud. See the list below. |
 | `agent_partial` | | Live agent reply text while a task runs. Only with an agent that streams. |
 | `agent_result` | `diff` | The task finished. `text` is the agent's summary and `diff` is the code changes. Only sent when an agent is set. |
-| `speech` | `audio` | The agent's summary read aloud. `audio` is base64 MP3 and `text` is what it says. Sent right after `agent_result`, only when ElevenLabs is set up. See Spoken summaries. |
+| `speech` | `audio`, `kind` | Text read aloud. `audio` is base64 MP3, `text` is what it says, and `kind` is `intro` (the one-time welcome), `summary`, `narration` (said while the agent works) or `reply` (an answer to the user mid-run). Only sent when ElevenLabs is set up. See Spoken summaries. |
+| `interrupt` | none | Stop playing speech now and drop any queued clips. Sent when the user says "hey Coder" or "stop" over a spoken summary, or "hey Coder" during an agent run. |
+| `preview` | `text` | `open` or `close`. The agent is serving a site on port 4173 of its container and asked for it to be shown or hidden. The web app shows it in a panel through its `/preview/` proxy. Sent right after `agent_result`. |
 | `error` | | Something failed. `text` is a plain sentence for the user. |
 
 Example result:
@@ -230,44 +233,64 @@ The bridge logs the chosen agent and the allowed origins at startup.
 
 ## Workspace rules file
 
-"Approve" only works if the agent knows what it means. That rule and the others live in `~/.claude/CLAUDE.md`, Claude Code's user-level rules file. It applies to every project in the workspace, and a project's own `CLAUDE.md` still works alongside it.
+"Approve" only works if the agent knows what it means. That rule and the others live in `agent-rules.md` in this repository. The agent container copies them into `~/.claude/CLAUDE.md`, Claude Code's user-level rules file, each time it starts:
 
-There are no keywords for discarding or reversing changes. The user asks for that in their own words and the agent handles it like any other request.
+- The rules are one marked section, from the `# VoiceCoder rules (vN)` heading to `# End VoiceCoder rules`. Anything else in the file is left alone.
+- To change the rules, edit `agent-rules.md` and raise the version number in its first line. Containers holding an older section replace it on their next start.
+- The rules apply to every project in the workspace, and a project's own `CLAUDE.md` still works alongside them.
 
-If the file already exists, add the rules under their heading instead of overwriting it.
+The rules name the agent Terrance, make it conversational, and tell it to end each reply with a `Summary:` section, which is the only part read aloud.
 
-```
-# VoiceCoder rules
+### User profile
 
-- Work only inside the project folder you were started in. Never run git push.
-- Never commit unless the user says "approve". On approve, commit all current changes with a short message describing them.
-- If a request is unclear, ask one short clarifying question and change nothing until the user answers.
-- You may install packages or download what a request needs. Say so in your summary when you do.
-- Use your judgment on whether to run the project's tests after a change, based on how the user has set up and is using them. Whenever you do run tests, say in your summary whether they passed.
-- End every reply with a summary of at most five sentences. Write it as plain text with no symbols or markdown, describing in everyday language what you did and what it means for the user. Do not make it overly technical.
-```
-
-The last rule matters to the bridge: the agent's final reply is what `agent_result` returns as `text`.
+The agent keeps what it learns about the user in `~/.voicecoder/profile.md`, in the same home volume as the project. The rules import the file (`@~/.voicecoder/profile.md`), so Claude Code loads it at the start of each conversation, and they tell the agent to be curious about the user and add lasting facts and preferences to it. It is kept apart from the rules file because setup rewrites the rules section when the rules change. The file stays on the machine that runs the containers and is never written to a database. Its contents do reach Anthropic as part of the conversation when the agent reads it, like any other file the agent opens, and when the bridge passes it as background to its own short Claude calls (see [Talking while the agent works](#talking-while-the-agent-works)). Delete the file to make the agent forget.
 
 ## Spoken summaries
 
 With `ELEVENLABS_API_KEY` set in the bridge's environment, the bridge sends each agent summary to ElevenLabs and passes the audio to the web app:
 
 ```
-{"type":"speech","text":"I added add(a, b) to math_utils.py and a test.","audio":"<base64 MP3>"}
+{"type":"speech","kind":"summary","text":"I added add(a, b) to math_utils.py and a test.","audio":"<base64 MP3>"}
 ```
 
 - It arrives right after `agent_result`, so the summary and diff show without waiting for the audio.
-- Only the final summary is spoken. Status lines, streamed replies, errors, and stopped runs are not.
+- The agent's status lines, streamed replies, errors, and stopped runs are never read out. Of the agent's own words, only the final summary is spoken.
 - The web app plays it, for example `new Audio('data:audio/mpeg;base64,' + audio).play()`. Browsers only allow that after the user has clicked or typed on the page once.
 - If ElevenLabs fails, the bridge logs the reason and sends no `speech` message. The result is unaffected.
+- Only the closing summary is spoken. The bridge reads aloud what follows the last `Summary:` line of the agent's reply (`**Summary:**` and `## Summary` also count). The full reply still goes to the screen in `agent_result`.
+- A reply with no `Summary:` line is spoken with its code blocks removed, so code is never read out by accident. Code inside the summary is spoken, because the agent only puts it there when the user asks to hear it.
+- Markdown symbols are dropped from the spoken text.
+- The first request sent to the agent is followed by a one-time welcome `speech` message, sent before the agent finishes. It is remembered in `.voicecoder/intro-played` next to the project folder, so restarts do not repeat it. A client must play `speech` messages in order, not on top of each other.
 - Summaries longer than 1200 characters are cut before they are spoken, because ElevenLabs bills per character.
+
+### Cutting in
+
+The user can interrupt by voice at two points. Both need "hey Coder" or "hey VoiceCoder"; a bare "Coder" is not enough, so a passing mention does not cancel work.
+
+- **While the agent is working.** As soon as the phrase is heard the client gets `interrupt` so it stops talking. With talk on (below), the run carries on and the rest of the utterance is answered as a side conversation. With talk off, the run is stopped and the rest of the utterance (ended by silence or the end word, as usual) is sent as the next request once the stopped run has settled.
+- **While a summary is being spoken.** The client must keep sending microphone audio while a `summary` clip plays, and tell the bridge with `{"type":"speech_start"}` and `{"type":"speech_end"}`. In between, other speech is ignored (it may be the app's own voice picked up by the mic), "stop" sends `interrupt`, and "hey Coder" sends `interrupt` and starts a new request.
+
+A client should not send microphone audio while the `intro` clip plays: the welcome itself says "hey Coder" and "over".
+
+### Talking while the agent works
+
+With `ANTHROPIC_API_KEY` in the bridge's environment and an agent set, the bridge makes short Claude calls of its own, separate from the coding agent's session:
+
+- **Narration.** A few seconds into a run, and then every few seconds while the agent's output keeps changing, the bridge asks for one plain, conversational sentence about what is going on and sends it as a `status` message and a `narration` `speech` message. The agent's raw output is given to the model as notes only; the prompt forbids reading out code, commands, paths or file contents, and code blocks are stripped from the answer before it is spoken. A line that is ready only after the run ended is dropped. Needs ElevenLabs.
+- **Side conversation.** Something said with "hey Coder" (or typed) during a run is answered without stopping it, as a `status` message and a `reply` `speech` message. The model also picks one action: nothing, stop the run (when the user clearly asks for that), or queue the request (when it is new coding work) to start when the current run ends. The `stop` control drops a queued request. The side voice cannot change project files. When the user tells it something lasting about themselves, it adds a line to the profile file, which the coding agent also reads.
+- Each narration line and each answer is one extra Claude request on the same key. If a call fails, narration is skipped and a side question gets the plain "Still working" status.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
+| `ANTHROPIC_API_KEY` | empty | Turns talk on. Read from the environment only. |
+| `BRIDGE_TALK` | on | `off` turns narration and side conversation off. |
+| `BRIDGE_TALK_MODEL` | `ANTHROPIC_MODEL`, else `claude-haiku-4-5` | Model for these calls. |
+| `BRIDGE_PROFILE_FILE` | `<project>/../.voicecoder/profile.md` | The user's profile, passed as background. |
 | `ELEVENLABS_API_KEY` | empty | ElevenLabs key. Empty turns speech off. Read from the environment only; never write it into a file in this repository. |
 | `ELEVENLABS_VOICE_ID` | `JBFqnCBsd6RMkjVDRZzb` | Voice to use. |
 | `ELEVENLABS_MODEL` | `eleven_flash_v2_5` | ElevenLabs model. Flash is their low-latency model. |
+| `BRIDGE_INTRO` | built-in welcome | Text of the one-time welcome. `off` turns it off. |
+| `BRIDGE_INTRO_FILE` | `<project>/../.voicecoder/intro-played` | File that records the welcome was played. |
 
 ## Test page
 
